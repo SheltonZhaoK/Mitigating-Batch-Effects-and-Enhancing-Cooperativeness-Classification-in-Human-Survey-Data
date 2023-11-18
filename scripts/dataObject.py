@@ -7,7 +7,7 @@
 # 
 # -----------------------------------------------------------
 
-import os
+import os, umap
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
@@ -17,7 +17,23 @@ from sklearn.decomposition import PCA
 import pandas as pd
 import numpy as np
 
-class pca(BaseEstimator, TransformerMixin):
+class umapReducer(BaseEstimator, TransformerMixin):
+    def __init__(self, seed):
+        self.seed = seed
+    
+    def fit(self, X, y=None):
+        self.umap = umap.UMAP(random_state=self.seed).fit(X)
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"Reduce data to 2 UMAP component")
+        umap_data = self.umap.transform(X)
+        umap_data = pd.DataFrame(umap_data)
+        umap_data.index = X.index.to_list()
+        umap_data.columns = ["UMAP_1", "UMAP_2"]
+        return umap_data
+    
+class pcaReducer(BaseEstimator, TransformerMixin):
     def __init__(self, criteria):
         self.criteria = criteria
     
@@ -33,7 +49,7 @@ class pca(BaseEstimator, TransformerMixin):
         pca_data.index = X.index.to_list()
         pca_data.columns = [f"PC_{i+1}" for i in range(pca_data.shape[1])]
         pca_data.index.name = X.index.name
-        return X
+        return pca_data
 
 class variableFeaturesSelector(BaseEstimator, TransformerMixin):
     def __init__(self, numFeatures):
