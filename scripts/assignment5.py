@@ -1,4 +1,4 @@
-import warnings, os
+import warnings, os, argparse
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,21 +9,24 @@ from sklearn.pipeline import Pipeline
 from dataObject import (NaColumnsHandler, NaHandler, duplicateHandler, rowOutlierChecker, correlatedFeatureRemover, 
                         normalizer, variableFeaturesSelector, pcaReducer, audit_data, umapReducer)
 
-def main():
+from configs import Configs
+def main(args):
     ################################### read data ###################################
     label = "W2CL1R"
     data = pd.read_csv("../data/ICPSR_36371/DS0001/36371-0001-Data.tsv", sep="\t", na_values=[" "])
 
     #################################### data auditing ###################################
-    report = audit_data(data, duplicateRow = True, duplicateCol = True, NaN = True, column_NaN = True,  maxNA = 0.51)
+    report = audit_data(data, duplicateRow = args["DataProcessing"]["audit"]["duplicateRow"], duplicateCol = args["DataProcessing"]["audit"]["duplicateCol"], 
+                        NaN = args["DataProcessing"]["audit"]["NaN"], column_NaN = args["DataProcessing"]["audit"]["column_NaN"],  
+                        maxNA = args["DataProcessing"]["audit"]["maxNA"])
 
     #################################### data cleaning ###################################
     print(f"{'*'*30} Data Cleaning {'*'*30}")
     dataCleaner = Pipeline([
                             ("NaColumnsHandler", NaColumnsHandler(columnNames=report["Large_NAs_columns"])),
-                            ("NaHandler", NaHandler(indices=report["NaN"], evaluation=False)),
-                            ("logNormalizer", duplicateHandler(indices=report["duplicate"], evaluation=False)),
-                            ("rowOutlierChecker", rowOutlierChecker(stdScale=3, evaluation=False)),
+                            ("NaHandler", NaHandler(indices=report["NaN"], evaluation=args["DataProcessing"]["cleaning"]["evaluation"])),
+                            ("logNormalizer", duplicateHandler(indices=report["duplicate"], evaluation=args["DataProcessing"]["cleaning"]["evaluation"])),
+                            ("rowOutlierChecker", rowOutlierChecker(stdScale=args["DataProcessing"]["cleaning"]["stdScale"], evaluation=args["DataProcessing"]["cleaning"]["evaluation"]))
                             ])
     data = dataCleaner.fit_transform(data)
 
@@ -39,14 +42,14 @@ def main():
     #################################### features processing ###################################
     print(f"{'*'*30} Select Features {'*'*30}")
     pc_feature_selector = Pipeline([
-                        ("correlatedFeatureRemover", correlatedFeatureRemover(upperBound=0.98)),
-                        ("normalizer", normalizer(lowerBound=-1,upperBound=1)), 
-                        ("variableFeaturesSelector", variableFeaturesSelector(numFeatures=100)),
-                        ("pca", pcaReducer(criteria=0.98))
+                        ("correlatedFeatureRemover", correlatedFeatureRemover(upperBound=args["DataProcessing"]["feature_selection"]["correlationUpperBound"])),
+                        ("normalizer", normalizer(lowerBound=args["DataProcessing"]["feature_selection"]["scaleRange"][0],upperBound=args["DataProcessing"]["feature_selection"]["scaleRange"][1])), 
+                        ("variableFeaturesSelector", variableFeaturesSelector(numFeatures=args["DataProcessing"]["feature_selection"]["numVariableFeatures"])),
+                        ("pca", pcaReducer(criteria=args["DataProcessing"]["feature_selection"]["pcaCriteria"]))
                         ])
 
     umap_feature_selector = Pipeline([
-                        ("umap", umapReducer(seed=1))
+                        ("umap", umapReducer(seed=args["seed"]))
                         ])
 
     pca_data = pc_feature_selector.fit_transform(data)
@@ -66,4 +69,5 @@ def main():
     plt.show()
 
 if __name__ == "__main__":
-    main()
+    args = Configs().configs
+    main(args)
