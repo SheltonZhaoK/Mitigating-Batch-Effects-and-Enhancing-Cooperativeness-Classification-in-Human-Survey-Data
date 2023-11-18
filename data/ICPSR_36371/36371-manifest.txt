@@ -1,0 +1,58 @@
+File Manifest for ICPSR 36371
+
+Davis, Darren W., and Brian D. Silver. The Attack on America and Civil
+Liberties Trade-Offs: A Three-Wave National Panel Survey, 2001-2004.
+ICPSR36371-v1. East Lansing, MI: Michigan State University. Office for
+Survey Research (OSR). Institute for Public Policy and Social Research
+(IPPSR)/Ann Arbor, MI: Inter-university Consortium for Political and Social
+Research [distributors], 2017-10-13. http://doi.org/10.3886/ICPSR36371.v1
+
+
+Study-level Documentation
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    36371-descriptioncitation.pdf       -       -         -       2018-02-20  -
+
+    36371-related_literature.txt        -       -         -       daily       -
+
+    36371-manifest.txt                  -       -         -       daily       -
+
+
+DS0001 The Attack on America and Civil Liberties Trade-Offs: A Three-Wave
+National Panel Survey, 2001-2004
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    36371-0001-Data.dta                 -       3,661     787     2017-10-13  84e622e3a047e09269961d8125580395
+
+    36371-0001-Data.rda                 -       3,661     787     2017-10-13  c95de3f1e96385dc69c5e670d2857616
+
+    36371-0001-Data.sav                 -       3,661     787     2017-10-13  06641789bff76fd80aa0e7977cd013ec
+
+    36371-0001-Data.stc                 -       3,661     787     2017-10-13  ac35576e18d654769996652ba8b24156
+
+    36371-0001-Data.tsv                 -       3,661     787     2017-10-13  67e527c037d623bdd4054ced23f12d41
+
+    36371-0001-Data.txt                 1307    3,661     787     2017-10-13  97c88a5f9ea3383f80c296ebe6b76a44
+
+    36371-0001-Frequencies.pdf          -       -         -       2017-10-13  74b07386ff8b5edd5d9db3ee56f55f72
+
+    36371-0001-Questionnaire.pdf        -       -         -       2017-10-13  febd3894c1dc67ffb949f55b0d6a27c6
+
+    36371-0001-Report.pdf               -       -         -       2017-10-13  40a82674c0319bd5a2cd334a9f9df9cc
+
+    36371-0001-Setup.dct                -       -         -       2017-10-13  1ff856c7109409a62d1ce8069abbd982
+
+    36371-0001-Setup.do                 -       -         -       2017-10-13  6d8da1c199ac4b138f90debcaa787306
+
+    36371-0001-Setup.sas                -       -         -       2017-10-13  a57307414ce8f447511c7baa3a6651d4
+
+    36371-0001-Setup.sps                -       -         -       2017-10-13  cbb17a6f2bbde91522012fafdef6eed2
+
+    36371-0001-Supplemental_syntax.do   -       -         -       2017-10-13  7b9a4d4eb753a8bc1c226d2b84423c65
+
+    36371-0001-Supplemental_syntax.sas  -       -         -       2017-10-13  777c968490d19f83b7d12cd297d275ba
+
