@@ -7,11 +7,14 @@
 # 
 # -----------------------------------------------------------
 
-import os, umap
+import os, umap, json
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy.sparse import hstack
+import xgboost as xgb
+from scipy import stats
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.decomposition import PCA
 
 import pandas as pd
@@ -96,10 +99,12 @@ class correlatedFeatureRemover(BaseEstimator, TransformerMixin):
                 if abs(corr_matrix.iloc[i, j]) > self.upperBound:
                     colname = corr_matrix.columns[i]
                     self.columns_to_drop.add(colname)
+        # self.columns_to_keep = [column for column in X.columns if column not in self.columns_to_drop]
         return self
     
     def transform(self, X, y=None):
         X = X.drop(columns=self.columns_to_drop)
+        # X = X[[self.columns_to_keep]]
         print(f"Drop {len(self.columns_to_drop)} highly correlated columns with {self.upperBound} upper_bound")
         print(f"Dataset shape: {X.shape}")
         return X
@@ -133,62 +138,79 @@ class rowOutlierChecker(BaseEstimator, TransformerMixin):
         return X
     
 class NaColumnsHandler(BaseEstimator, TransformerMixin):
-    def __init__(self, columnNames):
-        self.columnNames = columnNames
+    def __init__(self, report):
+        if "Large_NAs_columns" in report:
+            self.columnNames = report["Large_NAs_columns"]
+            self.proceed = True
+        else:
+            self.proceed = False
     
     def fit(self, X, y=None):
         return self
     
     def transform(self, X, y=None):
-        print(f"{'-'*10} Handle Large NaN columns {'-'*10}")
-        if self.columnNames is not None:
-            X = X.drop(columns = self.columnNames)
-            print(f"Drop {len(self.columnNames)} columns that have execessive N/As")
-            print(f"Dataset shape: {X.shape}")
+        if self.proceed:
+            print(f"{'-'*10} Handle Large NaN columns {'-'*10}")
+            if self.columnNames is not None:
+                X = X.drop(columns = self.columnNames)
+                print(f"Drop {len(self.columnNames)} columns that have execessive N/As")
+                print(f"Dataset shape: {X.shape}")
         return X
 
 class NaHandler(BaseEstimator, TransformerMixin):
-    def __init__(self, indices, evaluation=False):
-        self.row_indices = indices[0]
-        self.column_indices = indices[1]
-        self.evaluation = evaluation
+    def __init__(self, report, evaluation=False):
+        if "NaN" in report:
+            indices = report["NaN"]
+            self.row_indices = indices[0]
+            self.column_indices = indices[1]
+            self.evaluation = evaluation
+            self.proceed = True
+        else:
+            self.proceed = False
     
     def fit(self, X, y=None):
         return self
     
     def transform(self, X, y=None):
-        print(f"{'-'*10} Handle NaN values {'-'*10}")
-        if not len(self.row_indices) == 0:
-            X = X.drop(self.row_indices)
-            if self.evaluation:
-                print(f"{len(self.row_indices)} samples have N/A that can't be predicted are removed")
-        print(f"Drop {len(self.row_indices)} rows with N/As")
-        print(f"Dataset shape: {X.shape}")
+        if self.proceed:
+            print(f"{'-'*10} Handle NaN values {'-'*10}")
+            if not len(self.row_indices) == 0:
+                X = X.drop(self.row_indices)
+                if self.evaluation:
+                    print(f"{len(self.row_indices)} samples have N/A that can't be predicted are removed")
+            print(f"Drop {len(self.row_indices)} rows with N/As")
+            print(f"Dataset shape: {X.shape}")
         return X
 
 class duplicateHandler(BaseEstimator, TransformerMixin):
-    def __init__(self, indices, evaluation=False):
-        self.row_indices = indices[0]
-        self.column_indices = indices[1]
-        self.evaluation = evaluation
+    def __init__(self, report, evaluation=False):
+        if "duplicate" in report:
+            indices = report["duplicate"]
+            self.row_indices = indices[0]
+            self.column_indices = indices[1]
+            self.evaluation = evaluation
+            self.proceed = True
+        else:
+            self.proceed = False
     
     def fit(self, X, y=None):
         return self
     
     def transform(self, X, y=None):
-        print(f"{'-'*10} Handle duplicates {'-'*10}")
-        if not len(self.row_indices) == 0:
-            if self.evaluation:
-                print(f"Find {len(self.row_indices)} duplicated samples, not removed in evaluation")
-            else:
-                X = X.drop(self.row_indices)
+        if self.proceed:
+            print(f"{'-'*10} Handle duplicates {'-'*10}")
+            if not len(self.row_indices) == 0:
+                if self.evaluation:
+                    print(f"Find {len(self.row_indices)} duplicated samples, not removed in evaluation")
+                else:
+                    X = X.drop(self.row_indices)
 
-        if not len(self.column_indices) == 0:
-            if self.evaluation:
-                print(f"Find {len(self.column_indices)} duplicated samples, not removed in evaluation")
-            else:
-                X = X.drop(columns=self.column_indices)
-        print(f"Dataset shape: {X.shape}")
+            if not len(self.column_indices) == 0:
+                if self.evaluation:
+                    print(f"Find {len(self.column_indices)} duplicated samples, not removed in evaluation")
+                else:
+                    X = X.drop(columns=self.column_indices)
+            print(f"Dataset shape: {X.shape}")
         return X
 
         
@@ -322,7 +344,6 @@ def check_column_NA(data, cutoff):
     else:
         return None
 
-
 '''
 Find NA values in a file
     :param data: a panda dataFrame
@@ -416,3 +437,282 @@ def audit_data(data, duplicateRow = True, duplicateCol = True, NaN = True, colum
     if columns2drop is not None:
         report["duplicate"][1] = [index for index in report["duplicate"][1] if index not in report["Large_NAs_columns"]]
     return report
+
+def impute_NaN(data, label):
+    data = data.dropna(subset=[label])
+    # Impute NaN values separately for each class label
+    for label_value in data[label].unique():
+        class_data = data[data[label] == label_value]
+        mean_values = np.ceil(class_data.mean(skipna=True))
+        data.loc[data[label] == label_value] = class_data.fillna(mean_values)
+    data = data.dropna(axis=1) # drop columns where no numeric values are present
+    return data
+
+def select_features_ttest(data, label, alpha):
+    p_values = {}
+    selected_features = [label]
+
+    group_0 = data[data[label] == 0]
+    group_1 = data[data[label] == 1]
+
+    min_size = min(len(group_0), len(group_1))
+    group_0 = group_0.sample(min_size)
+    group_1 = group_1.sample(min_size)
+
+    for feature in data.columns:
+        if feature != label:
+            # Perform a paired t-test
+            t_stat, p_value = stats.ttest_ind(group_0[feature], group_1[feature])
+            p_values[feature] = p_value
+
+            if p_value < alpha:
+                selected_features.append(feature)
+
+    # Create a new DataFrame with only the selected features and the label
+    selected_data = data[selected_features]
+    print(f"Select {len(selected_features)-1} features with p_values smaller than {alpha}, original features: {len(data.columns)-1}")
+
+    return selected_data, p_values
+
+def select_features_importance(data, label, threshold=0.01):
+    X = data.drop(label, axis=1)
+    y = data[label]
+
+    model = xgb.XGBClassifier()
+    model.fit(X, y)
+    importances = model.feature_importances_
+    
+    feature_importances = dict(zip(X.columns, importances))
+    print(feature_importances)
+    selected_features = [feature for feature, importance in feature_importances.items() if importance > threshold]
+    selected_data = data[selected_features + [label]]
+    
+    return selected_data, feature_importances
+
+def select_features_manual(data, file):
+    with open(file, 'r') as f:
+        feature_names = [line.strip() for line in f]
+
+    # Filter the dataset to include only the features in the list and the label
+    selected_features = [f for f in feature_names if f in data.columns]
+    selected_data = data[selected_features]
+
+    return selected_data
+
+def select_by_wave(data, sample, feature):
+    with open('../data/feature_selection.json', 'r') as file:
+        feature_dict = json.load(file)
+    with open('../data/sample_selection.json', 'r') as file:
+        sample_dict = json.load(file)
+    
+    features = feature_dict[feature]
+    samples = sample_dict[sample]
+    data = data.iloc[samples]
+    data = data[list(set(features).intersection(data.columns))]
+    return data
+
+def transform_2_oneWavePsample(data):
+    Wave1 = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "W1BABS", "W1COLGRD", "W1LTHS", "W1ADVDEG", "W1COMHS", "W1SOMCOL", "W1OTHLNG", "CD5A",   "W1EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "W1CL1R", "W1COUNTY", "W1BRNUSA", "W1MALE", "W1FEMALE", "CC3",   "CD15",   "CD1",   "W1STRATA", "CD6",   "CD8",   "CD2"]
+    Wave2 = ["W2INCA", "W2INCE", "W2INCF", "W2INCD", "W2INCB", "W2INCC", "W2INCG", "W2BABS", "W2COLGRD", "W2LTHS", "W2ADVDEG", "W2COMHS", "W2SOMCOL", "W2OTHLNG", "W2CD5A", "W2EDLEVL", "W2CD2A", "W2CD4A_A", "W2CD4A_B", "W2CD4A_C", "W2CD4A_D", "W2CD4A_E", "W2CD4A_F", "W2X1", "W2CD6A", "W2CL1R", "W2COUNTY", "W2BRNUSA", "W2MALE", "W2FEMALE", "W2CC3", "W2CD15", "W2CD1", "W2STRATA", "W2CD6", "W2CD8", "W2CD2"]
+    Wave3 = ["W3INCA", "W3INCE", "W3INCF", "W3INCD", "W3INCB", "W3INCC", "W3INCG", "W3BABS", "W3COLGRD", "W3LTHS", "W3ADVDEG", "W3COMHS", "W3SOMCOL", "W3OTHLNG", "W3CD5A", "W3EDLEVL", "W3CD2A", "W3CD4A_A", "W3CD4A_B", "W3CD4A_C", "W3CD4A_D", "W3CD4A_E", "W3CD4A_F", "W3X1", "W3CD6A", "W3CL1R", "W3COUNTY", "W3BRNUSA", "W3MALE", "W3FEMALE", "W3CC3", "W3CD15", "W3CD1", "W3STRATA", "W3CD6", "W3CD8", "W3CD2"]
+    Wave_Agnostic = ["AGE1829", "AGE3039", "AGE4049M", "AGE5059M", "AGE6064M", "AGE65PLM"]
+
+    Generic_Wave = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "BABS", "COLGRD", "LTHS", "ADVDEG", "COMHS", "SOMCOL", "OTHLNG", "CD5A",   "EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "CL1R", "COUNTY", "BRNUSA", "MALE", "FEMALE", "CC3",   "CD15",   "CD1",   "STRATA", "CD6",   "CD8",   "CD2"]
+    Generic_full_wave = Generic_Wave + Wave_Agnostic
+    # This Code block creates a new data frame where the frist wave seen is taken from each sample
+    # data = pd.read_csv("../data/ICPSR_36371/DS0001/36371-0001-Data.tsv", sep='\t')
+    # for col in data:
+    #     data[col] = pd.to_numeric(data[col], errors='coerce').fillna(-1).astype(int)
+
+    sample_wave = [0 for i in range(3661)]
+
+    for i in range(3661):
+
+        # 1, 2, 3
+        if data["PANEL123"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 1
+
+        # 1 and 3
+        elif data["PANEL103"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 1
+
+        # 1 and 2
+        elif data["PANEL120"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 1
+
+        # 2 and 3
+        elif data["PANEL023"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 2
+        
+        # 1
+        elif data["ALLWAV1"][i] == 1:
+            sample_wave[i] = 1
+
+        # 2
+        elif data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 2
+        
+        # 3
+        elif data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 3
+
+    # sample_wave: list of size 3661 which corrsponds to the first wave a sample has been seen
+    data_n = []
+
+    for i, val in enumerate(sample_wave):
+        temp = []
+        if val == 1:
+
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 2:
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+
+        elif val == 3:
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+        
+    data_new = pd.DataFrame(data=data_n, columns=Generic_full_wave)
+    print(data_new.shape)
+    return data_new
+
+
+def transform_2_allWavePsample(data):
+    # CL1R
+    Wave1 = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "W1BABS", "W1COLGRD", "W1LTHS", "W1ADVDEG", "W1COMHS", "W1SOMCOL", "W1OTHLNG", "CD5A",   "W1EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "W1CL1R", "W1COUNTY", "W1BRNUSA", "W1MALE", "W1FEMALE", "CC3",   "CD15",   "CD1",   "W1STRATA", "CD6",   "CD8",   "CD2"]
+    Wave2 = ["W2INCA", "W2INCE", "W2INCF", "W2INCD", "W2INCB", "W2INCC", "W2INCG", "W2BABS", "W2COLGRD", "W2LTHS", "W2ADVDEG", "W2COMHS", "W2SOMCOL", "W2OTHLNG", "W2CD5A", "W2EDLEVL", "W2CD2A", "W2CD4A_A", "W2CD4A_B", "W2CD4A_C", "W2CD4A_D", "W2CD4A_E", "W2CD4A_F", "W2X1", "W2CD6A", "W2CL1R", "W2COUNTY", "W2BRNUSA", "W2MALE", "W2FEMALE", "W2CC3", "W2CD15", "W2CD1", "W2STRATA", "W2CD6", "W2CD8", "W2CD2"]
+    Wave3 = ["W3INCA", "W3INCE", "W3INCF", "W3INCD", "W3INCB", "W3INCC", "W3INCG", "W3BABS", "W3COLGRD", "W3LTHS", "W3ADVDEG", "W3COMHS", "W3SOMCOL", "W3OTHLNG", "W3CD5A", "W3EDLEVL", "W3CD2A", "W3CD4A_A", "W3CD4A_B", "W3CD4A_C", "W3CD4A_D", "W3CD4A_E", "W3CD4A_F", "W3X1", "W3CD6A", "W3CL1R", "W3COUNTY", "W3BRNUSA", "W3MALE", "W3FEMALE", "W3CC3", "W3CD15", "W3CD1", "W3STRATA", "W3CD6", "W3CD8", "W3CD2"]
+    Wave_Agnostic = ["AGE1829", "AGE3039", "AGE4049M", "AGE5059M", "AGE6064M", "AGE65PLM"]
+
+    Generic_Wave = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "BABS", "COLGRD", "LTHS", "ADVDEG", "COMHS", "SOMCOL", "OTHLNG", "CD5A",   "EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "CL1R", "COUNTY", "BRNUSA", "MALE", "FEMALE", "CC3",   "CD15",   "CD1",   "STRATA", "CD6",   "CD8",   "CD2"]
+    Generic_full_wave = Generic_Wave + Wave_Agnostic
+    # This Code block creates a new data frame where all waves seen in each sample are taken
+    # data = pd.read_csv("../data/ICPSR_36371/DS0001/36371-0001-Data.tsv", sep='\t')
+    # for col in data:
+    #     data[col] = pd.to_numeric(data[col], errors='coerce').fillna(-1).astype(int)
+
+    sample_wave = [0 for i in range(3661)]
+
+    for i in range(3661):
+
+        # 1, 2, 3
+        if data["PANEL123"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 123
+
+        # 1 and 3
+        elif data["PANEL103"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 13
+
+        # 1 and 2
+        elif data["PANEL120"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 12
+
+        # 2 and 3
+        elif data["PANEL023"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 23
+        
+        # 1
+        elif data["ALLWAV1"][i] == 1:
+            sample_wave[i] = 1
+
+        # 2
+        elif data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 2
+        
+        # 3
+        elif data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 3
+
+    # sample_wave: list of size 3661 which corrsponds to the first wave a sample has been seen
+    data_n = []
+
+    for i, val in enumerate(sample_wave):
+        temp = []
+        if val == 123:
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 12:
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 13:
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 23:
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+
+        elif val == 1:
+
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 2:
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+
+        elif val == 3:
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+        
+    data_new = pd.DataFrame(data=data_n, columns=Generic_full_wave)
+    print(data_new.shape)
+    return data_new

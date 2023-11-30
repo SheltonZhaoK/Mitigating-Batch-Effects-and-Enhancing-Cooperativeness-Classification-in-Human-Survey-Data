@@ -20,7 +20,7 @@ class Configs:
                     "duplicateCol": True,
                     "NaN": True,
                     "column_NaN": True,
-                    "maxNA": 0.51
+                    "maxNA": 0.52
                 },
 
                 "cleaning":
@@ -34,7 +34,8 @@ class Configs:
                     "correlationUpperBound": 0.98,
                     "scaleRange": [-1, 1],
                     "numVariableFeatures": 100,
-                    "pcaCriteria":0.98
+                    "pcaCriteria":0.99999999
+                    # "pcaCriteria":30
                 },
             }
     
