@@ -1,46 +1,341 @@
 # -----------------------------------------------------------
 # This script provides functionality for auditing, clean, process, and prepare data for downstream analysis
 #
-# Author: Konghao Zhao
-# Created: 2023-09-20
-# Modified: 2023-10-4
+# Author: Konghao Zhao, Cade Wiley
+# Created: 2023-10-27
+# Modified: 2023-10-30
 # 
 # -----------------------------------------------------------
 
-import sys, os, ast
+import os, umap, json
+
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from scipy.sparse import hstack
+import xgboost as xgb
+from scipy import stats
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.decomposition import PCA
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
-from joblib import dump, load
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.decomposition import PCA
-from sklearn.feature_selection import VarianceThreshold
-from multiprocessing import Pool
+class umapReducer(BaseEstimator, TransformerMixin):
+    def __init__(self, seed):
+        self.seed = seed
+    
+    def fit(self, X, y=None):
+        self.umap = umap.UMAP(random_state=self.seed).fit(X)
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"Reduce data to 2 UMAP component")
+        umap_data = self.umap.transform(X)
+        umap_data = pd.DataFrame(umap_data)
+        umap_data.index = X.index.to_list()
+        umap_data.columns = ["UMAP_1", "UMAP_2"]
+        return umap_data
+    
+class pcaReducer(BaseEstimator, TransformerMixin):
+    def __init__(self, criteria):
+        self.criteria = criteria
+    
+    def fit(self, X, y=None):
+        self.pca = PCA(n_components=self.criteria)
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"Select {self.criteria} principle component")
+        pca_data = self.pca.fit_transform(X)
+        print(f"Dataset shape: {pca_data.shape}")
+        pca_data = pd.DataFrame(pca_data)
+        pca_data.index = X.index.to_list()
+        pca_data.columns = [f"PC_{i+1}" for i in range(pca_data.shape[1])]
+        pca_data.index.name = X.index.name
+        return pca_data
 
-def one_hot_encoding(data, columns = None, outputDir = None, inputDir = None):
-    print(f"{'*'*30} One-hot encoding {'*'*30}")
-    data = pd.get_dummies(data, columns = columns)
-    if outputDir is not None:
-        data.to_csv(os.path.join(outputDir, "one_hot_feature.csv"), index = False)
-        print(f"{'<'*10} One-hot encoding features saved to {os.path.join(outputDir, 'one_hot_feature.csv')} {'>'*10}")
-    if inputDir is not None:
-        features = pd.read_csv(os.path.join(inputDir, "one_hot_feature.csv"))
-        # assert len(features.columns.to_list()) == len(data.columns.to_list()), "Can't process evaluation data, features after one-hot encoding do not match"
-        assert set(features.columns).issubset(set(data.columns)), "Can't process evaluation data, features does not match"
-        data = data[features.columns.to_list()]
-        print(f"{'<'*10} Match features to {os.path.join(inputDir, 'one_hot_feature.csv')} {'>'*10}")
-    return data
+class variableFeaturesSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, numFeatures):
+        self.numFeatures = numFeatures
+    
+    def fit(self, X, y=None):
+        columns_std = X.std()
+        sorted_columns = columns_std.sort_values(ascending=False).index
+        self.highly_variable_columns = sorted_columns[:self.numFeatures]
+        return self
+    
+    def transform(self, X, y=None):
+        if len(self.highly_variable_columns) < self.numFeatures:
+            print(f"Can't Select {self.numFeatures} highly variable features, keep the original features")
+        else:
+            print(f"Select {self.numFeatures} highly variable features")
+        X = X[self.highly_variable_columns]
+        print(f"Dataset shape: {X.shape}")
+        return X
+    
+class normalizer(BaseEstimator, TransformerMixin):
+    def __init__(self, lowerBound, upperBound):
+        self.lowerBound = lowerBound
+        self.upperBound = upperBound
+    
+    def fit(self, X, y=None):
+        self.scaler = MinMaxScaler(feature_range=(self.lowerBound, self.upperBound))
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"Normalize Dataset")
+        np_data = self.scaler.fit_transform(X)
+        X = X.copy()
+        X.iloc[:,:] = np_data
+        return X
 
-def split_features(data, cutoff = 5):
-    # print(data.nunique())
-    categorical_features = data.select_dtypes(include=['object']).columns.tolist()
-    # rest = data.drop(columns=categorical_features)
-    # categorical_features.extend(rest.columns[rest.nunique() <= cutoff].tolist())
-    numeric_features = list(set(data.columns.to_list()) - set(categorical_features))
-    print(f"Numeric features: {numeric_features}\nCategorical features: {categorical_features}")
-    return data[numeric_features], data[categorical_features]
+class correlatedFeatureRemover(BaseEstimator, TransformerMixin):
+    def __init__(self, upperBound):
+        self.upperBound = upperBound
+    
+    def fit(self, X, y=None):
+        corr_matrix = X.corr().abs()
+        self.columns_to_drop = set()
+
+        for i in range(len(corr_matrix.columns)):
+            for j in range(i):
+                if abs(corr_matrix.iloc[i, j]) > self.upperBound:
+                    colname = corr_matrix.columns[i]
+                    self.columns_to_drop.add(colname)
+        # self.columns_to_keep = [column for column in X.columns if column not in self.columns_to_drop]
+        return self
+    
+    def transform(self, X, y=None):
+        X = X.drop(columns=self.columns_to_drop)
+        # X = X[[self.columns_to_keep]]
+        print(f"Drop {len(self.columns_to_drop)} highly correlated columns with {self.upperBound} upper_bound")
+        print(f"Dataset shape: {X.shape}")
+        return X
+
+class rowOutlierChecker(BaseEstimator, TransformerMixin):
+    def __init__(self, stdScale, evaluation):
+        self.stdScale = stdScale
+        self.evaluation = evaluation
+        
+    def fit(self, X, y=None):
+        row_mean = X.mean(axis=1)
+        mean = row_mean.mean()
+        std = row_mean.std()
+
+        self.upper_bound = mean + self.stdScale*std
+        self.lower_bound = mean - self.stdScale*std
+        return self
+
+    def transform(self, X, y=None):
+        print(f"{'-'*10} Filter Rows {'-'*10}")
+        X['mean'] = X.mean(axis=1)
+        rows_to_remove = X[(X['mean'] < (self.lower_bound)) | (X['mean'] > (self.upper_bound))].index
+        if self.evaluation:
+            print(f"Find {len(rows_to_remove)} out of distribution rows in evaluation, not dropped")
+        else:
+            X = X.drop(rows_to_remove)
+            print(f"Drop {len(rows_to_remove)} out of distribution rows")
+        X = X.drop(columns=["mean"])
+        print(f"Dataset shape: {X.shape}")
+        return X
+    
+class NaColumnsHandler(BaseEstimator, TransformerMixin):
+    def __init__(self, report):
+        if "Large_NAs_columns" in report:
+            self.columnNames = report["Large_NAs_columns"]
+            self.proceed = True
+        else:
+            self.proceed = False
+    
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X, y=None):
+        if self.proceed:
+            print(f"{'-'*10} Handle Large NaN columns {'-'*10}")
+            if self.columnNames is not None:
+                X = X.drop(columns = self.columnNames)
+                print(f"Drop {len(self.columnNames)} columns that have execessive N/As")
+                print(f"Dataset shape: {X.shape}")
+        return X
+
+class NaHandler(BaseEstimator, TransformerMixin):
+    def __init__(self, report, evaluation=False):
+        if "NaN" in report:
+            indices = report["NaN"]
+            self.row_indices = indices[0]
+            self.column_indices = indices[1]
+            self.evaluation = evaluation
+            self.proceed = True
+        else:
+            self.proceed = False
+    
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X, y=None):
+        if self.proceed:
+            print(f"{'-'*10} Handle NaN values {'-'*10}")
+            if not len(self.row_indices) == 0:
+                X = X.drop(self.row_indices)
+                if self.evaluation:
+                    print(f"{len(self.row_indices)} samples have N/A that can't be predicted are removed")
+            print(f"Drop {len(self.row_indices)} rows with N/As")
+            print(f"Dataset shape: {X.shape}")
+        return X
+
+class duplicateHandler(BaseEstimator, TransformerMixin):
+    def __init__(self, report, evaluation=False):
+        if "duplicate" in report:
+            indices = report["duplicate"]
+            self.row_indices = indices[0]
+            self.column_indices = indices[1]
+            self.evaluation = evaluation
+            self.proceed = True
+        else:
+            self.proceed = False
+    
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X, y=None):
+        if self.proceed:
+            print(f"{'-'*10} Handle duplicates {'-'*10}")
+            if not len(self.row_indices) == 0:
+                if self.evaluation:
+                    print(f"Find {len(self.row_indices)} duplicated samples, not removed in evaluation")
+                else:
+                    X = X.drop(self.row_indices)
+
+            if not len(self.column_indices) == 0:
+                if self.evaluation:
+                    print(f"Find {len(self.column_indices)} duplicated columns, not removed in evaluation")
+                else:
+                    X = X.drop(columns=self.column_indices)
+            print(f"Dataset shape: {X.shape}")
+        return X
+
+        
+class dataBalancer(BaseEstimator, TransformerMixin):
+    def __init__(self, metaData, column2balance, outputDir, training=True):
+        self.metaData = metaData
+        self.column2balance = column2balance
+        self.training = training
+        self.outputDir = outputDir
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        if self.training:
+            print(f"{'='*20} Balance rows for training data{'='*20}")
+            sample_size = self.metaData[self.column2balance].value_counts().min()
+            ix = []
+            for x in self.metaData[self.column2balance].unique():
+                indices = self.metaData[self.metaData[self.column2balance] == x].index
+                ix.extend(np.random.choice(indices, sample_size, replace=False))
+            np.save(os.path.join(self.outputDir, "training_indices.npy"), ix)
+            X = X.loc[ix]
+            return X 
+        else:
+            print(f"{'='*20} Rows not balanced for test data {'='*20}")
+            return X
+
+class sparseNullRemover(TransformerMixin, BaseEstimator):
+    def __init__(self, cutoff):
+        self.cutoff = cutoff
+
+    def fit(self, X, y=None):
+        remove = []
+        num_cols = X.shape[1]
+        num_rows = X.shape[0]
+        for col in range(num_cols):
+            zero = num_rows - (X.getcol(col)).count_nonzero()
+            if zero > (num_rows * self.cutoff):
+                remove.append(col)
+        self.columns_to_keep = [col for col in range(num_cols) if col not in remove]
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"{'='*20} Filter out columns that have large NAs in sparse{'='*20}")
+        new_data = hstack([X.getcol(col) for col in self.columns_to_keep], format='csc')
+        return new_data
+
+class PdConverter(TransformerMixin, BaseEstimator):
+    def __init__(self, index, inputDir=None):
+        self.index = index
+        self.inputDir = inputDir
+
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X, y=None):
+        if self.inputDir is not None:
+            training_indices = np.load(os.path.join(self.inputDir, 'training_indices.npy'))
+            self.index = [self.index[i] for i in training_indices]
+    
+        data = pd.DataFrame(X)
+        data.index = self.index
+        data.columns = [f"PC_{i+1}" for i in range(X.shape[1])]
+        return data
+
+class StandardizeScaler(TransformerMixin, BaseEstimator):
+    def __init__(self, mean):
+        self.mean = mean
+
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"{'='*20} Standardize Data {'='*20}")
+        stdScaler = StandardScaler(with_mean=self.mean)
+        X = stdScaler.fit_transform(X)
+        return X
+    
+class logNormalizer(TransformerMixin, BaseEstimator):
+    def __init__(self):
+        pass
+
+    def fit(self, X, y=None):
+        return self
+    
+    def transform(self, X, y=None):
+        print(f"{'='*20} Log Normalize Data {'='*20}")
+        return np.log1p(X)
+
+class rowFilter(TransformerMixin, BaseEstimator):
+    def __init__(self, std_scale = 3, outOfDist = True, evaluation = False):
+        self.std_scale = std_scale
+        self.outOfDist = outOfDist
+        self.evaluation = evaluation
+
+    def fit(self, X, y=None):
+        if self.outOfDist is not None:
+            mean = X.mean(axis=1).mean()
+            std = X.mean(axis=1).std()
+            self.upper_bound = mean + self.std_scale*std
+            self.lower_bound = mean - self.std_scale*std
+        return self
+
+    def transform(self, X, y=None):
+        print(f"{'='*20} Filter Rows {'='*20}")
+        
+        X['mean'] = X.mean(axis=1)
+        if not self.evaluation:
+            if self.outOfDist:
+                rows_to_remove = X[(X['mean'] < (self.lower_bound)) | (X['mean'] > (self.upper_bound))].index
+                X = X.drop(rows_to_remove)
+                print(f"Drop {len(rows_to_remove)} out of distribution rows")
+            X = X.drop(columns=["mean"])
+            print(X.shape)
+            return X
+        else:
+            if self.outOfDist:
+                rows_to_remove = X[(X['mean'] < (self.lower_bound)) | (X['mean'] > (self.upper_bound))].index
+                print(f"Find {len(rows_to_remove)} out of distribution rows in evaluation, not dropped")
+            X = X.drop(columns=["mean"])
+            print(X.shape)
+            return X
 
 def check_column_NA(data, cutoff):
     na_ratios = data.isna().mean()
@@ -49,77 +344,6 @@ def check_column_NA(data, cutoff):
         return columns2drop
     else:
         return None
-
-def sanity_check(data, maxNA = 0.5):
-    columns2drop = check_column_NA(data, maxNA)
-    if columns2drop is not None:
-        data = data.drop(columns2drop, axis=1)
-        print(f"Sanity check ——> {columns2drop} with more than {maxNA*100}% N/A are dropped")
-    return data
-
-'''
-Detect the encoding of a file by try and errors, exits if the encoding can't be found
-    :param filePath: a string of path to the file
-    :param delimiter: a character of delimiter in the file
-    
-    :returns encoding: a string of the encoding of the file
-'''
-def detect_encoding(filePath, delimiter):
-    for encoding in ['utf-8','utf-16','utf-32','latin-1','ascii','cp1252','iso-8859-1',
-                     'iso-8859-2','iso-8859-15','cp437','cp850','mac_roman','gb2312','gbk','big5',
-                     'shift_jis','euc_jp','euc_kr']:
-        try:
-            data = pd.read_csv(filePath, encoding=encoding, delimiter = delimiter)
-            return encoding
-        except UnicodeDecodeError:
-            continue
-        except Exception as e:
-            continue
-    print("File encoding can not be decided")
-    exit()
-
-'''
-Read data from file
-    :param filePath: a string of path to the file
-    :param index: a string of the column name as index 
-    :param label: a string of the column name as label 
-    :param dropped_columns: a list of the column name to drop
-    :param delimiter: a character of delimiter in the file 
-    
-    :returns data: a panda dataFrame of data
-    :returns labels: a panda dataFrame of labels
-'''
-def read_data(filePath, label, index = None, dropped_columns = None, encoding = False, delimiter = ",", expand = None):
-    if encoding:
-        encoding = detect_encoding(filePath, delimiter)
-        print(f"Read {filePath} with {encoding} encoding")
-        if index is None:
-            data = pd.read_csv(filePath, index_col = "Unnamed: 0", encoding = encoding, delimiter = delimiter)      
-        else:
-            data = pd.read_csv(filePath, index_col = index, encoding = encoding, delimiter = delimiter)
-    else:
-        print(f"Read {filePath} ")
-        if index is None:
-            data = pd.read_csv(filePath, index_col = "Unnamed: 0", delimiter = delimiter)
-        else:
-            data = pd.read_csv(filePath, index_col = index, delimiter = delimiter)
-
-    if expand is not None:
-        expanded_columns = data[expand].apply(ast.literal_eval).apply(pd.Series)
-        data = pd.concat([data.drop(expand, axis=1), expanded_columns], axis=1)   
-
-    data.index.name = "ID"
-    labels = None
-    if label is not None:
-        data = data.dropna(subset=[label])
-        labels = data[[label]]
-        labels.index = data.index.to_list()
-        labels.columns = [label]
-        data = data.drop(columns=label)
-        labels = labels.rename(columns={label: 'labels'})
-    if dropped_columns is not None:
-        data = data.drop(columns=dropped_columns)
-    return data, labels
 
 '''
 Find NA values in a file
@@ -161,20 +385,6 @@ def find_duplicate(data, duplicateRow = True, duplicateCol = True):
         return [duplicate_rows, duplicate_columns]
     else:
         return None
-
-'''
-Check if the data's column and index match with the given one
-    :param data: a panda dataFrame
-    :param columns_name: a list of columns_name
-    :param index_name: a list of index
-    
-    :returns boolean: a boolean if the name matches
-'''
-def check_alignment(data, columns_name, index_name):
-    if data.columns.to_list() == columns_name and data.index.to_list() == index_name:
-        return True
-    else:
-        return False
 
 '''
 Audit the data quality issue for data cleaning and generate a report
@@ -229,352 +439,297 @@ def audit_data(data, duplicateRow = True, duplicateCol = True, NaN = True, colum
         report["duplicate"][1] = [index for index in report["duplicate"][1] if index not in report["Large_NAs_columns"]]
     return report
 
-'''
-Clean the data given the auditing report
-    :param data: a panda dataFrame
-    :param label: a string of label name
-    :param labels: a panda dataFrame
-    :param report: a dictionary from audit_data()
-    :param classification: a boolean to decide whether to enode the labels as numeric numebrs
-    
-    :returns data: a panda dataFrame
-    :param labels: a panda dataFrame
-'''
-def clean_data(data, labels, report, classification = True, evaluation = False):
-    print(f"{'*'*30} Data Cleaning {'*'*30}")
-    num_rows = 0
-    num_cols = 0
-    label = "labels"
-    if labels is not None:
-        if classification:
-            labels = labels.iloc[:,0].astype('category').cat.codes.to_frame(label)
-    print(f"Original dataset shape: {data.shape}")
-
-    for key in report:
-        print(f"{'-'*10} Handle {key}{'-'*10}")
-
-        if key == "Large_NAs_columns":
-            data = data.drop(columns = report["Large_NAs_columns"])
-            num_cols += len(report["Large_NAs_columns"])
-            print(f"Drop {len(report['Large_NAs_columns'])} columns that have execessive N/As")
-            print(f"Dataset shape: {data.shape}")
-            continue
-
-        row_indices = report[key][0]
-        column_indices = report[key][1]
-        if key == "NaN":
-            if not len(row_indices) == 0:
-                data = data.drop(row_indices)
-                if labels is not None:
-                    labels = labels.drop(row_indices)
-                    if evaluation:
-                        print(f"{len(row_indices)} samples have N/A that can't be predicted are removed")
-                num_rows += len(row_indices)
-        elif key == "duplicate":
-            if not len(row_indices) == 0:
-                if evaluation:
-                    print(f"Find {len(row_indices)} duplicated samples, not removed in evaluation")
-                data = data.drop(row_indices)
-                if labels is not None:
-                    labels = labels.drop(row_indices)
-                num_rows += len(row_indices)
-            if not len(column_indices) == 0:
-                data = data.drop(columns=column_indices)
-                num_cols += len(column_indices)
-        print(f"Dataset shape: {data.shape}")
-    print(f"Remove {num_rows} rows {num_cols} columns in total")
-    if labels is not None:
-        assert data.index.to_list() == labels.index.to_list(), "data and label indices are not matched" 
-    return data, labels
-
-'''
-Drop rows that hev mean outside the range
-    :param data: a panda dataFrame
-    :param labels: a panda dataFrame
-    :param std_scale: a integer that specify the range eg: [-std_scale * mean, std_scale * mean]
-    :param outputDir: a string of output directory of ranges if it is not None
-    :param inputDir: a string of input directory of ranges if it is not None
-    
-    :returns data: a panda dataFrame
-    :param labels: a panda dataFrame
-'''
-def drop_outOfDistribution_rows(data, labels, std_scale, outputDir = None, inputDir = None, evaluation = False):
-    if inputDir is not None:
-        data['mean'] = data.mean(axis=1)
-        mean = data['mean'].mean()
-        ranges = np.loadtxt(os.path.join(inputDir, "mean_range.txt"))
-        print(f"Row mean ranges extracted from {os.path.join(inputDir, 'mean_range.txt')}")
-        lower_bound = ranges[0]
-        upper_bound = ranges[1]
-    else:
-        data['mean'] = data.mean(axis=1)
-        mean = data['mean'].mean()
-        std = data['mean'].std()
-        upper_bound = mean + std_scale*std
-        lower_bound = mean - std_scale*std
-    rows_to_remove = data[(data['mean'] < (lower_bound)) | (data['mean'] > (upper_bound))].index
-    if evaluation:
-        print(f"Find {len(rows_to_remove)} out of distribution rows in evaluation, not dropped")
-    else:
-        data = data.drop(rows_to_remove)
-        if labels is not None:
-            labels = labels.drop(rows_to_remove)
-        print(f"Drop {len(rows_to_remove)} out of distribution rows")
-    data = data.drop(columns=["mean"])
-    if labels is not None:
-        assert data.index.to_list() == labels.index.to_list(), "data and label indices are not matched"
-    if outputDir is not None:
-        mean_range = np.array([mean - std_scale*std, mean + std_scale*std])
-        np.savetxt(os.path.join(outputDir, "mean_range.txt"), mean_range, delimiter=",")
-        print(f"{'<'*10} Row mean range saved to {os.path.join(outputDir, 'mean_range.txt')} {'>'*10}")
-    return data, labels
-
-def drop_rows_w_outlier(data, labels, z_range):
-    row_means = data.mean(axis=1)
-    row_stds = data.std(axis=1)
-    z_scores = data.subtract(row_means, axis=0).divide(row_stds, axis=0)
-    rows_with_outliers = z_scores[(z_scores > z_range) | (z_scores < -z_range)].any(axis=1)
-    data = data[~rows_with_outliers]
-    if labels is not None:
-        labels = labels[~rows_with_outliers]
-    print(f"Drop {rows_with_outliers.sum()} rows that have outliers")
-    if labels is not None:
-        assert data.index.to_list() == labels.index.to_list(), "data and label indices are not matched" 
-    return data, labels
-
-'''
-Wrapper funciton for filtering rows
-    :param data: a panda dataFrame
-    :param labels: a panda dataFrame
-    :param std_scale: a integer that specify the range eg: [-std_scale * mean, std_scale * mean]
-    :param outOfDist: a boolean that specify whether to drop out of distribution rows
-    :param outlier: a boolean that specify whether to drop rows that have outliers
-    :param visualize: a boolean that specify whether to visualize the process of filtering
-    :param outputDir: a string of output directory of log if it is not None
-    :param inputDir: a string of input directory of log if it is not None
-    
-    :returns data: a panda dataFrame
-    :param labels: a panda dataFrame
-'''
-def filter_rows(data, labels, std_scale = 3, z_range = 3, outOfDist = True, outlier = False, visualize = False, outputDir = None, inputDir = None, evaluation = False):
-    print(f"{'*'*30} Data Processing {'*'*30}")
-    print(f"{'-'*10} Filter Rows {'-'*10}")
-    if visualize:
-        print(f"Original Distribution")
-        data.T.boxplot()
-        plt.show()
-    
-    # drop rows that are out of the distribution based on the z-values of each row
-    if outOfDist:
-        data, labels = drop_outOfDistribution_rows(data, labels, std_scale, outputDir, inputDir, evaluation)
-        print(f"Dataset shape: {data.shape}")
-        if visualize:
-            data.T.boxplot()
-            plt.show()
-    
-    # drop rows that have outliers based on the z-values of each element in a row
-    if outlier:
-        data, labels = drop_rows_w_outlier(data, labels, z_range)
-        print(f"Dataset shape: {data.shape}")
-        if visualize:
-            data.T.boxplot()
-            plt.show()
-    return data, labels
-
-'''
-Remove columns that have zero larger than the threshold
-    :param data: a panda dataFrame
-    :param zero_percentage: a float of percentage of zeros
-
-    :param labels: a panda dataFrame
-'''
-def remove_columns_w_zeros(data, zero_percentage = 0.5):
-    cols_to_drop = [col for col in data.columns if (data[col] == 0).sum() > (zero_percentage * len(data))]
-    data = data.drop(columns=cols_to_drop)
-    print(f"Drop {len(cols_to_drop)} columns that have more than {zero_percentage*100}% zeros")
+def impute_NaN(data, label):
+    data = data.dropna(subset=[label])
+    # Impute NaN values separately for each class label
+    for label_value in data[label].unique():
+        class_data = data[data[label] == label_value]
+        mean_values = np.ceil(class_data.mean(skipna=True))
+        data.loc[data[label] == label_value] = class_data.fillna(mean_values)
+    data = data.dropna(axis=1) # drop columns where no numeric values are present
     return data
 
-'''
-Normalize data
-    :param data: a panda dataFrame
-    :param rangeV: a list of floats specifying the scaling range
-    :param outputDir: a string of output directory of scaler object if it is not None
-    :param inputDir: a string of input directory of scaler object if it is not None
+def select_features_ttest(data, label, alpha):
+    p_values = {}
+    selected_features = [label]
+
+    group_0 = data[data[label] == 0]
+    group_1 = data[data[label] == 1]
+
+    min_size = min(len(group_0), len(group_1))
+    group_0 = group_0.sample(min_size)
+    group_1 = group_1.sample(min_size)
+
+    for feature in data.columns:
+        if feature != label:
+            # Perform a paired t-test
+            t_stat, p_value = stats.ttest_ind(group_0[feature], group_1[feature])
+            p_values[feature] = p_value
+
+            if p_value < alpha:
+                selected_features.append(feature)
+
+    # Create a new DataFrame with only the selected features and the label
+    selected_data = data[selected_features]
+    print(f"Select {len(selected_features)-1} features with p_values smaller than {alpha}, original features: {len(data.columns)-1}")
+
+    return selected_data, p_values
+
+def select_features_importance(data, label, threshold=0.01):
+    X = data.drop(label, axis=1)
+    y = data[label]
+
+    model = xgb.XGBClassifier()
+    model.fit(X, y)
+    importances = model.feature_importances_
     
-    :returns data: a panda dataFrame
-'''
-def normalize_data(data, rangeV, outputDir = None, inputDir = None):
-    if inputDir is not None:
-        scaler = load(os.path.join(inputDir, "normalizer.joblib"))
-        print(f"Normalize Dataset using scaler from {os.path.join(inputDir, 'normalizer.joblib')}")
-    else:
-        print(f"Normalize Dataset")
-        minV = rangeV[0]
-        maxV = rangeV[1]
-        scaler = MinMaxScaler(feature_range=(minV, maxV))
-    np_data = scaler.fit_transform(data)
-    data = data.copy()
-    data.iloc[:,:] = np_data
-    if outputDir is not None:
-        dump(scaler, os.path.join(outputDir, "normalizer.joblib"))
-        print(f"{'<'*10} Row mean range saved to {os.path.join(outputDir, 'mean_range.txt')} {'>'*10}")
+    feature_importances = dict(zip(X.columns, importances))
+    print(feature_importances)
+    selected_features = [feature for feature, importance in feature_importances.items() if importance > threshold]
+    selected_data = data[selected_features + [label]]
+    
+    return selected_data, feature_importances
+
+def select_features_manual(data, file):
+    with open(file, 'r') as f:
+        feature_names = [line.strip() for line in f]
+
+    # Filter the dataset to include only the features in the list and the label
+    selected_features = [f for f in feature_names if f in data.columns]
+    selected_data = data[selected_features]
+
+    return selected_data
+
+def select_by_wave(data, sample, feature):
+    with open('../data/feature_selection.json', 'r') as file:
+        feature_dict = json.load(file)
+    with open('../data/sample_selection.json', 'r') as file:
+        sample_dict = json.load(file)
+    
+    features = feature_dict[feature]
+    samples = sample_dict[sample]
+    data = data.iloc[samples]
+    data = data[list(set(features).intersection(data.columns))]
     return data
 
-'''
-Select highly variable features based on the std computed for each column
-    :param data: a panda dataFrame
-    :param number: a number of feature with highest std selected
-    :param outputDir: a string of output directory of processed data if it is not None
-    :param inputDir: a string of input directory of processed data if it is not None
-    
-    :returns data: a panda dataFrame
-'''
-def select_highly_variable_features(data, number = 50, outputDir = None, inputDir = None):
-    if inputDir is not None:
-        mapping = pd.read_csv(os.path.join(inputDir, "select_highly_variable_features.csv"))
-        columns_mapping = mapping.columns.to_list()
-        data = data[columns_mapping]
-        print(f"Select {len(columns_mapping)} highly variable columns from {os.path.join(inputDir, 'select_highly_variable_features.csv')}")
-    else:
-        columns_std = data.std()
-        sorted_columns = columns_std.sort_values(ascending=False).index
-        highly_variable_columns = sorted_columns[:number]
-        data = data[highly_variable_columns]
-        if number > len(data.columns):
-            print(f"Can't find {number} variable features, keep the original features")
-        else:
-            print(f"Select {number} highly variable features")
-        if outputDir is not None:
-            data.to_csv(os.path.join(outputDir, "select_highly_variable_features.csv"), index = False)
-            print(f"{'<'*10} Data after selected highly variable features saved to {os.path.join(outputDir, 'remove_correlated_features.csv')} {'>'*10}")
-    return data
+def transform_2_oneWavePsample(data):
+    Wave1 = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "W1BABS", "W1COLGRD", "W1LTHS", "W1ADVDEG", "W1COMHS", "W1SOMCOL", "W1OTHLNG", "CD5A",   "W1EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "W1CL1R", "W1COUNTY", "W1BRNUSA", "W1MALE", "W1FEMALE", "CC3",   "CD15",   "CD1",   "W1STRATA", "CD6",   "CD8",   "CD2"]
+    Wave2 = ["W2INCA", "W2INCE", "W2INCF", "W2INCD", "W2INCB", "W2INCC", "W2INCG", "W2BABS", "W2COLGRD", "W2LTHS", "W2ADVDEG", "W2COMHS", "W2SOMCOL", "W2OTHLNG", "W2CD5A", "W2EDLEVL", "W2CD2A", "W2CD4A_A", "W2CD4A_B", "W2CD4A_C", "W2CD4A_D", "W2CD4A_E", "W2CD4A_F", "W2X1", "W2CD6A", "W2CL1R", "W2COUNTY", "W2BRNUSA", "W2MALE", "W2FEMALE", "W2CC3", "W2CD15", "W2CD1", "W2STRATA", "W2CD6", "W2CD8", "W2CD2"]
+    Wave3 = ["W3INCA", "W3INCE", "W3INCF", "W3INCD", "W3INCB", "W3INCC", "W3INCG", "W3BABS", "W3COLGRD", "W3LTHS", "W3ADVDEG", "W3COMHS", "W3SOMCOL", "W3OTHLNG", "W3CD5A", "W3EDLEVL", "W3CD2A", "W3CD4A_A", "W3CD4A_B", "W3CD4A_C", "W3CD4A_D", "W3CD4A_E", "W3CD4A_F", "W3X1", "W3CD6A", "W3CL1R", "W3COUNTY", "W3BRNUSA", "W3MALE", "W3FEMALE", "W3CC3", "W3CD15", "W3CD1", "W3STRATA", "W3CD6", "W3CD8", "W3CD2"]
+    Wave_Agnostic = ["AGE1829", "AGE3039", "AGE4049M", "AGE5059M", "AGE6064M", "AGE65PLM"]
 
-'''
-Run pca and automatically select number of PCs
-    :param data: a panda dataFrame
-    :param num_components: a number of initial principal components to retain
-    :param cumulative_variance_ratio: a float of cumulative variance PCs should reach
-    :param visualize: a boolean specify whether to visualize the data
-    
-    :returns data: a panda dataFrame
-'''
-def run_pca(data, num_components = 50, cumulative_variance_ratio = 0.98, visualize = False):
-    pca = PCA(n_components=num_components)
-    pca_data = pca.fit_transform(data)
-    explained_ratio = pca.explained_variance_ratio_
-    cumulative_ratio = np.cumsum(pca.explained_variance_ratio_)
-    n_pcs_retained = np.argmax(cumulative_ratio >= cumulative_variance_ratio)
-    if n_pcs_retained == 0:
-        n_pcs_retained = num_components
+    Generic_Wave = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "BABS", "COLGRD", "LTHS", "ADVDEG", "COMHS", "SOMCOL", "OTHLNG", "CD5A",   "EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "CL1R", "COUNTY", "BRNUSA", "MALE", "FEMALE", "CC3",   "CD15",   "CD1",   "STRATA", "CD6",   "CD8",   "CD2"]
+    Generic_full_wave = Generic_Wave + Wave_Agnostic
+    # This Code block creates a new data frame where the frist wave seen is taken from each sample
+    # data = pd.read_csv("../data/ICPSR_36371/DS0001/36371-0001-Data.tsv", sep='\t')
+    # for col in data:
+    #     data[col] = pd.to_numeric(data[col], errors='coerce').fillna(-1).astype(int)
+
+    sample_wave = [0 for i in range(3661)]
+
+    for i in range(3661):
+
+        # 1, 2, 3
+        if data["PANEL123"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 1
+
+        # 1 and 3
+        elif data["PANEL103"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 1
+
+        # 1 and 2
+        elif data["PANEL120"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 1
+
+        # 2 and 3
+        elif data["PANEL023"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 2
         
-    if n_pcs_retained < int(len(data) / 5):
-        pca_data = pca_data[:, :n_pcs_retained]
-        print(f"Select {n_pcs_retained} principal components with {cumulative_variance_ratio} cumulative variance")
-        print(f"Dataset shape: {pca_data.shape}")
-    else:
-        pca_data = pca_data[:, :int(len(data) / 5)]
-        print(f"Select {int(len(data)/5)} principal components {cumulative_variance_ratio} cumulative variance")
-        print(f"Dataset shape: {pca_data.shape}")
-    
-    pca_data = pd.DataFrame(pca_data)
-    pca_data.index = data.index.to_list()
-    pca_data.columns = [f"PC_{i+1}" for i in range(pca_data.shape[1])]
-    pca_data.index.name = data.index.name
-    
-    # If visualization is desired
-    if visualize:
-        plt.figure(figsize=(10,5))
-        plt.plot(range(1, len(cumulative_ratio) + 1), cumulative_ratio, marker='o', linestyle='--')
-        plt.title('Explained Variance by Components')
-        plt.xlabel('Number of Components')
-        plt.ylabel('Cumulative Explained Variance')
-        plt.axhline(y=cumulative_variance_ratio, color='r', linestyle='--')
-        plt.show()
-    return pca_data
+        # 1
+        elif data["ALLWAV1"][i] == 1:
+            sample_wave[i] = 1
+
+        # 2
+        elif data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 2
+        
+        # 3
+        elif data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 3
+
+    # sample_wave: list of size 3661 which corrsponds to the first wave a sample has been seen
+    data_n = []
+
+    for i, val in enumerate(sample_wave):
+        temp = []
+        if val == 1:
+
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 2:
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+
+        elif val == 3:
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+        
+    data_new = pd.DataFrame(data=data_n, columns=Generic_full_wave)
+    print(data_new.shape)
+    return data_new
 
 
-'''
-Wrapper funciton for selecting features
-    :param data: a panda dataFrame
-    :param zero_percentage: a float of percentage of zeros
-    :param correlation_upper_bound: a float of maximum correlation between columns
-    :param highly_variable_features: a number of feature with highest std selected
-    :param pca: a boolean that specify whether perform pca
-    :param num_components: a number of initial principal components to retain
-    :param cumulative_variance_ratio: a float of cumulative variance PCs should reach
-    :param normalize: a list of floats specifying the scaling range if not None
-    :param visualize: a boolean that specify whether to visualize the process of selection
-    :param outputDir: a string of output directory of log if it is not None
-    :param inputDir: a string of input directory of log if it is not None
-    :param drop_zeros: a boolean that specify whether to drop_zeros
-    
-    :returns data: a panda dataFrame
-'''
-def select_features(data, zero_percentage = 0.5, correlation_upper_bound = 0.98, highly_variable_features = 100, 
-                    pca = False, num_components = 30, cumulative_variance_ratio = 0.98, normalize = None, visualize = False,
-                    outputDir = None, inputDir = None, drop_zeros = True):
-    print(f"{'-'*10} Select Columns {'-'*10}")
-    if drop_zeros:
-        data = remove_columns_w_zeros(data, zero_percentage = zero_percentage)
-        print(f"Dataset shape: {data.shape}")
-    data = remove_correlated_features(data, upper_bound = correlation_upper_bound, outputDir = outputDir, inputDir = inputDir)
-    print(f"Dataset shape: {data.shape}")
-    if normalize is not None:
-        data = normalize_data(data, rangeV = normalize, outputDir = outputDir, inputDir = inputDir)
-    data = select_highly_variable_features(data, number = highly_variable_features, outputDir = outputDir, inputDir = inputDir)
-    print(f"Dataset shape: {data.shape}")
-    if pca:
-        data = run_pca(data, num_components = num_components, cumulative_variance_ratio = cumulative_variance_ratio,
-                       visualize = visualize)
+def transform_2_allWavePsample(data):
+    # CL1R
+    Wave1 = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "W1BABS", "W1COLGRD", "W1LTHS", "W1ADVDEG", "W1COMHS", "W1SOMCOL", "W1OTHLNG", "CD5A",   "W1EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "W1CL1R", "W1COUNTY", "W1BRNUSA", "W1MALE", "W1FEMALE", "CC3",   "CD15",   "CD1",   "W1STRATA", "CD6",   "CD8",   "CD2"]
+    Wave2 = ["W2INCA", "W2INCE", "W2INCF", "W2INCD", "W2INCB", "W2INCC", "W2INCG", "W2BABS", "W2COLGRD", "W2LTHS", "W2ADVDEG", "W2COMHS", "W2SOMCOL", "W2OTHLNG", "W2CD5A", "W2EDLEVL", "W2CD2A", "W2CD4A_A", "W2CD4A_B", "W2CD4A_C", "W2CD4A_D", "W2CD4A_E", "W2CD4A_F", "W2X1", "W2CD6A", "W2CL1R", "W2COUNTY", "W2BRNUSA", "W2MALE", "W2FEMALE", "W2CC3", "W2CD15", "W2CD1", "W2STRATA", "W2CD6", "W2CD8", "W2CD2"]
+    Wave3 = ["W3INCA", "W3INCE", "W3INCF", "W3INCD", "W3INCB", "W3INCC", "W3INCG", "W3BABS", "W3COLGRD", "W3LTHS", "W3ADVDEG", "W3COMHS", "W3SOMCOL", "W3OTHLNG", "W3CD5A", "W3EDLEVL", "W3CD2A", "W3CD4A_A", "W3CD4A_B", "W3CD4A_C", "W3CD4A_D", "W3CD4A_E", "W3CD4A_F", "W3X1", "W3CD6A", "W3CL1R", "W3COUNTY", "W3BRNUSA", "W3MALE", "W3FEMALE", "W3CC3", "W3CD15", "W3CD1", "W3STRATA", "W3CD6", "W3CD8", "W3CD2"]
+    Wave_Agnostic = ["AGE1829", "AGE3039", "AGE4049M", "AGE5059M", "AGE6064M", "AGE65PLM"]
+
+    Generic_Wave = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "BABS", "COLGRD", "LTHS", "ADVDEG", "COMHS", "SOMCOL", "OTHLNG", "CD5A",   "EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "CL1R", "COUNTY", "BRNUSA", "MALE", "FEMALE", "CC3",   "CD15",   "CD1",   "STRATA", "CD6",   "CD8",   "CD2"]
+    Generic_full_wave = Generic_Wave + Wave_Agnostic
+
+    sample_wave = [0 for i in range(len(data))]
+
+    for i in range(len(data)):
+
+        # 1, 2, 3
+        if data["PANEL123"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 123
+
+        # 1 and 3
+        elif data["PANEL103"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 13
+
+        # 1 and 2
+        elif data["PANEL120"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 12
+
+        # 2 and 3
+        elif data["PANEL023"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 23
+        
+        # 1
+        elif data["ALLWAV1"][i] == 1:
+            sample_wave[i] = 1
+
+        # 2
+        elif data["ALLWAV2"][i] == 1:
+            sample_wave[i] = 2
+        
+        # 3
+        elif data["ALLWAV3"][i] == 1:
+            sample_wave[i] = 3
+
+    # sample_wave: list of size 3661 which corrsponds to the first wave a sample has been seen
+    data_n = []
+
+    for i, val in enumerate(sample_wave):
+        temp = []
+        if val == 123:
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 12:
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 13:
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 23:
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+            temp = []
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+
+        elif val == 1:
+
+            for j, var in enumerate(Wave1 + Wave_Agnostic):
+                temp.append(data[var][i])
+
+            data_n.append(temp)
+
+        elif val == 2:
+
+            for j, var in enumerate(Wave2 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+
+        elif val == 3:
+
+            for j, var in enumerate(Wave3 + Wave_Agnostic):
+                temp.append(data[var][i])
+            
+            data_n.append(temp)
+        
+    data_new = pd.DataFrame(data=data_n, columns=Generic_full_wave)
+    print(data_new.shape)
+    return data_new
+
+def reduce_data(data, pc_reducer, umap_reducer, args):
+    if args.d == "pca_data":
+        data = pc_reducer.fit_transform(data)
+    elif args.d == "umap_data":
+        data = umap_reducer.fit_transform(data)
+    elif args.d == "pca_umap_data":
+        data = pc_reducer.fit_transform(data)
+        data = umap_reducer.fit_transform(data)
     return data
 
-'''
-Remove highly correlated features
-    :param data: a panda dataFrame
-    :param upper_bound: a float of maximum correlation between columns
-    :param outputDir: a string of output directory of processed data if it is not None
-    :param inputDir: a string of input directory of processed data if it is not None
-    
-    :returns data: a panda dataFrame
-'''
-def remove_correlated_features(data, upper_bound = 0.99, outputDir = None, inputDir = None):
-    if inputDir is not None:
-        mapping = pd.read_csv(os.path.join(inputDir, "remove_correlated_features.csv"))
-        columns_mapping = mapping.columns.to_list()
-        data = data[columns_mapping]
-        print(f"Select {len(columns_mapping)} none correlated columns from {os.path.join(inputDir, 'remove_correlated_features.csv')}")
-    else:
-        corr_matrix = data.corr().abs()
-        columns_to_drop = set()
+def encode_label(data, label):
+    data[label].fillna(0, inplace=True)
+    data[label] = data[label].apply(lambda x: 1 if x in [1.0, 2.0] else 0)
 
-        for i in range(len(corr_matrix.columns)):
-            for j in range(i):
-                if abs(corr_matrix.iloc[i, j]) > upper_bound:
-                    colname = corr_matrix.columns[i]
-                    columns_to_drop.add(colname)
-        print(f"Drop {len(columns_to_drop)} highly correlated columns with {upper_bound} upper_bound")
-        data = data.drop(columns=columns_to_drop)
-        if outputDir is not None:
-            data.to_csv(os.path.join(outputDir, "remove_correlated_features.csv"), index = False)
-            print(f"{'<'*10} Data after removing correlated features saved to {os.path.join(outputDir, 'remove_correlated_features.csv')} {'>'*10}")
+    # data = data.dropna(subset=[label])
+    # data = data[data[label] != 9]
+    # data[label] = data[label].apply(lambda x: 1 if x in [1.0, 2.0] else 0)
+
     return data
-
-'''
-Balance dataset
-    :param data: a panda dataFrame
-    :param labels: a panda dataFrame
-
-    :return data: a panda dataFrame
-    :return labels: a panda dataFrame
-'''
-def balance_dataset(data, labels):
-    print(f"{'-'*10} Balance Dataset {'-'*10}")
-    label = labels.columns[0]
-    min_labels = labels[label].value_counts().min()
-    ix = []
-    for x in pd.unique(labels[label]):
-        ix.extend(labels[labels[label] == x].sample(n=min_labels).index)
-    data = data.loc[ix]
-    labels = labels.loc[ix]
-    print(f"Dataset shape: {data.shape}")
-    return data, labels

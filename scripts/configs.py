@@ -11,6 +11,8 @@ class Configs:
         self.configs = {
             "seed": 1,
             "test_size": 0.3,
+            "inputDir": "../data",
+            "outputDir": "../output",
             
             "DataProcessing":
             {
@@ -20,7 +22,7 @@ class Configs:
                     "duplicateCol": True,
                     "NaN": True,
                     "column_NaN": True,
-                    "maxNA": 0.52
+                    "maxNA": 0.3 #0.25 -> 0-1265, 1-588, features-27 | 0.30 -> 0-1241, 1-563, features-62
                 },
 
                 "cleaning":
@@ -34,7 +36,7 @@ class Configs:
                     "correlationUpperBound": 0.98,
                     "scaleRange": [-1, 1],
                     "numVariableFeatures": 100,
-                    "pcaCriteria":0.99999999
+                    "pcaCriteria":0.98
                     # "pcaCriteria":30
                 },
             }
