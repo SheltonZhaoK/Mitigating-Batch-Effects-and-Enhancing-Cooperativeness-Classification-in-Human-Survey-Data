@@ -12,7 +12,7 @@ import os, umap, json
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy.sparse import hstack
-import xgboost as xgb
+from sklearn.pipeline import Pipeline
 from scipy import stats
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.decomposition import PCA
@@ -141,13 +141,14 @@ class rowOutlierChecker(BaseEstimator, TransformerMixin):
     
 class NaColumnsHandler(BaseEstimator, TransformerMixin):
     def __init__(self, report):
-        if "Large_NAs_columns" in report:
-            self.columnNames = report["Large_NAs_columns"]
+        self.report = report
+       
+    def fit(self, X, y=None):
+        if "Large_NAs_columns" in self.report:
+            self.columnNames = self.report["Large_NAs_columns"]
             self.proceed = True
         else:
             self.proceed = False
-    
-    def fit(self, X, y=None):
         return self
     
     def transform(self, X, y=None):
@@ -161,16 +162,18 @@ class NaColumnsHandler(BaseEstimator, TransformerMixin):
 
 class NaHandler(BaseEstimator, TransformerMixin):
     def __init__(self, report, evaluation=False):
-        if "NaN" in report:
-            indices = report["NaN"]
+        self.report = report
+        self.evaluation = evaluation
+    
+    def fit(self, X, y=None):
+        if "NaN" in self.report:
+            indices = self.report["NaN"]
             self.row_indices = indices[0]
             self.column_indices = indices[1]
-            self.evaluation = evaluation
             self.proceed = True
         else:
             self.proceed = False
     
-    def fit(self, X, y=None):
         return self
     
     def transform(self, X, y=None):
@@ -186,16 +189,17 @@ class NaHandler(BaseEstimator, TransformerMixin):
 
 class duplicateHandler(BaseEstimator, TransformerMixin):
     def __init__(self, report, evaluation=False):
-        if "duplicate" in report:
-            indices = report["duplicate"]
+        self.report = report
+        self.evaluation = evaluation
+    
+    def fit(self, X, y=None):
+        if "duplicate" in self.report:
+            indices = self.report["duplicate"]
             self.row_indices = indices[0]
             self.column_indices = indices[1]
-            self.evaluation = evaluation
             self.proceed = True
         else:
             self.proceed = False
-    
-    def fit(self, X, y=None):
         return self
     
     def transform(self, X, y=None):
@@ -733,3 +737,71 @@ def encode_label(data, label):
     # data[label] = data[label].apply(lambda x: 1 if x in [1.0, 2.0] else 0)
 
     return data
+
+def make_data(data, label, configs, args, type, dataCleaner = None, feature_selector = None):
+    if type == "training":
+        report = audit_data(data, duplicateRow = configs["DataProcessing"]["audit"]["duplicateRow"], duplicateCol = configs["DataProcessing"]["audit"]["duplicateCol"], 
+                            NaN = configs["DataProcessing"]["audit"]["NaN"], column_NaN = configs["DataProcessing"]["audit"]["column_NaN"],  
+                            maxNA = configs["DataProcessing"]["audit"]["maxNA"])
+        
+        # data cleaning
+        print(f"{'*'*30} Data Cleaning {'*'*30}")
+        dataCleaner = Pipeline([
+                                ("NaColumnsHandler", NaColumnsHandler(report=report)),
+                                ("NaHandler", NaHandler(report=report, evaluation=configs["DataProcessing"]["cleaning"]["evaluation"])),
+                                ("duplicateHandler", duplicateHandler(report=report, evaluation=configs["DataProcessing"]["cleaning"]["evaluation"])),
+                                ("rowOutlierChecker", rowOutlierChecker(stdScale=configs["DataProcessing"]["cleaning"]["stdScale"], evaluation=configs["DataProcessing"]["cleaning"]["evaluation"]))
+                                ])
+        data = dataCleaner.fit_transform(data)
+        target = data[[label]]
+        data = data.drop(columns=[label])
+        # features processing
+        print(f"{'*'*30} Select Features {'*'*30}")
+        feature_selector = Pipeline([
+                            ("dataBalancer", dataBalancer(metaData = target, column2balance = label, training = True, outputDir = "../output")),
+                            ("correlatedFeatureRemover", correlatedFeatureRemover(upperBound=configs["DataProcessing"]["feature_selection"]["correlationUpperBound"])),
+                            ("normalizer", normalizer(lowerBound=configs["DataProcessing"]["feature_selection"]["scaleRange"][0],upperBound=configs["DataProcessing"]["feature_selection"]["scaleRange"][1])), 
+                            ("variableFeaturesSelector", variableFeaturesSelector(numFeatures=configs["DataProcessing"]["feature_selection"]["numVariableFeatures"]))
+                            ])
+        
+        training_indices = np.load(os.path.join(configs["outputDir"], 'training_indices.npy'))
+        pc_reducer = Pipeline([("pca", pcaReducer(criteria=configs["DataProcessing"]["feature_selection"]["pcaCriteria"]))])
+        umap_reducer = Pipeline([("umap", umapReducer(seed=configs["seed"]))])
+
+        data = feature_selector.fit_transform(data)
+        data.index = training_indices
+        target = target.loc[training_indices, :]
+        if args.d is not None:
+            data = reduce_data(data, pc_reducer, umap_reducer, args)
+        return data, target, dataCleaner, feature_selector
+    else:
+        report = audit_data(data, duplicateRow = configs["DataProcessing"]["audit"]["duplicateRow"], duplicateCol = configs["DataProcessing"]["audit"]["duplicateCol"], 
+                        NaN = configs["DataProcessing"]["audit"]["NaN"], column_NaN = configs["DataProcessing"]["audit"]["column_NaN"],  
+                        maxNA = configs["DataProcessing"]["audit"]["maxNA"])
+        # data cleaning
+        print(f"{'*'*30} Data Cleaning {'*'*30}")
+        dataCleaner.set_params(NaColumnsHandler__report=report)
+        dataCleaner.set_params(NaHandler__report=report)
+        dataCleaner.set_params(duplicateHandler__report=report)
+        dataCleaner.set_params(NaHandler__evaluation=True)
+        dataCleaner.set_params(duplicateHandler__evaluation=True)
+        dataCleaner.set_params(rowOutlierChecker__evaluation=True)
+
+        # dataCleaner = Pipeline([
+        #                         ("NaColumnsHandler", NaColumnsHandler(report=report)),
+        #                         ("NaHandler", NaHandler(report=report, evaluation=True)),
+        #                         ("duplicateHandler", duplicateHandler(report=report, evaluation=True)),
+        #                         ("rowOutlierChecker", rowOutlierChecker(stdScale=configs["DataProcessing"]["cleaning"]["stdScale"], evaluation=True))
+        #                         ])
+        data = dataCleaner.fit_transform(data)
+
+        target = data[[label]]
+        data = data.drop(columns=[label])
+
+        print(f"{'*'*30} Select Features {'*'*30}")
+        # features processing
+        feature_selector.set_params(dataBalancer__training=False)
+        data = feature_selector.transform(data)
+        if args.d is not None:
+            data = reduce_data(data, pc_reducer, umap_reducer, args)
+        return data, target
