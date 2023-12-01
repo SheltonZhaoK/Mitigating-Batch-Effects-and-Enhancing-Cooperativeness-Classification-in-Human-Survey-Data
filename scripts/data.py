@@ -719,11 +719,11 @@ def transform_2_allWavePsample(data):
     return data_new
 
 def reduce_data(data, pc_reducer, umap_reducer, args):
-    if args.d == "pca_data":
+    if args.d == "pca":
         data = pc_reducer.fit_transform(data)
-    elif args.d == "umap_data":
+    elif args.d == "umap":
         data = umap_reducer.fit_transform(data)
-    elif args.d == "pca_umap_data":
+    elif args.d == "pca_umap":
         data = pc_reducer.fit_transform(data)
         data = umap_reducer.fit_transform(data)
     return data
@@ -738,7 +738,7 @@ def encode_label(data, label):
 
     return data
 
-def make_data(data, label, configs, args, type, dataCleaner = None, feature_selector = None):
+def make_data(data, label, configs, args, type, dataCleaner = None, feature_selector = None, pc_reducer = None, umap_reducer = None):
     if type == "training":
         report = audit_data(data, duplicateRow = configs["DataProcessing"]["audit"]["duplicateRow"], duplicateCol = configs["DataProcessing"]["audit"]["duplicateCol"], 
                             NaN = configs["DataProcessing"]["audit"]["NaN"], column_NaN = configs["DataProcessing"]["audit"]["column_NaN"],  
@@ -764,16 +764,16 @@ def make_data(data, label, configs, args, type, dataCleaner = None, feature_sele
                             ("variableFeaturesSelector", variableFeaturesSelector(numFeatures=configs["DataProcessing"]["feature_selection"]["numVariableFeatures"]))
                             ])
         
-        training_indices = np.load(os.path.join(configs["outputDir"], 'training_indices.npy'))
         pc_reducer = Pipeline([("pca", pcaReducer(criteria=configs["DataProcessing"]["feature_selection"]["pcaCriteria"]))])
         umap_reducer = Pipeline([("umap", umapReducer(seed=configs["seed"]))])
 
         data = feature_selector.fit_transform(data)
+        training_indices = np.load(os.path.join(configs["outputDir"], 'training_indices.npy'))
         data.index = training_indices
         target = target.loc[training_indices, :]
-        if args.d is not None:
+        if not args.d == "raw":
             data = reduce_data(data, pc_reducer, umap_reducer, args)
-        return data, target, dataCleaner, feature_selector
+        return data, target, dataCleaner, feature_selector, pc_reducer, umap_reducer
     else:
         report = audit_data(data, duplicateRow = configs["DataProcessing"]["audit"]["duplicateRow"], duplicateCol = configs["DataProcessing"]["audit"]["duplicateCol"], 
                         NaN = configs["DataProcessing"]["audit"]["NaN"], column_NaN = configs["DataProcessing"]["audit"]["column_NaN"],  
@@ -786,13 +786,6 @@ def make_data(data, label, configs, args, type, dataCleaner = None, feature_sele
         dataCleaner.set_params(NaHandler__evaluation=True)
         dataCleaner.set_params(duplicateHandler__evaluation=True)
         dataCleaner.set_params(rowOutlierChecker__evaluation=True)
-
-        # dataCleaner = Pipeline([
-        #                         ("NaColumnsHandler", NaColumnsHandler(report=report)),
-        #                         ("NaHandler", NaHandler(report=report, evaluation=True)),
-        #                         ("duplicateHandler", duplicateHandler(report=report, evaluation=True)),
-        #                         ("rowOutlierChecker", rowOutlierChecker(stdScale=configs["DataProcessing"]["cleaning"]["stdScale"], evaluation=True))
-        #                         ])
         data = dataCleaner.fit_transform(data)
 
         target = data[[label]]
@@ -802,6 +795,6 @@ def make_data(data, label, configs, args, type, dataCleaner = None, feature_sele
         # features processing
         feature_selector.set_params(dataBalancer__training=False)
         data = feature_selector.transform(data)
-        if args.d is not None:
+        if not args.d == "raw":
             data = reduce_data(data, pc_reducer, umap_reducer, args)
         return data, target
