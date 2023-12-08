@@ -1,4 +1,5 @@
-import os
+import os, json, torch, random
+import numpy as np
 
 def create_mlp_args_adatively(configs, trainSize, numLayers):
     arg_dict = configs["Classifiers"]["mlp"]
@@ -35,3 +36,30 @@ def format_gridSearch_results(searcher, outputFile):
             f.write(f"Score: {score:.3f} +- {std:.3f}, Fit Time: {fit_time:.3f} +- {std_fit_time:.3f}, Parameters: {param}\n")
         print(f"{searcher.best_estimator_} search results saved to {outputFile}")
 
+def make_dir(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
+def output_feature_importance(name, train_data, classifier, args, configs):
+    best_estimator = classifier.best_estimator_
+    feature_importances = best_estimator.feature_importances_
+    feature_importance_dict = dict(zip(train_data.columns, feature_importances))
+    
+    # Sort the feature importances
+    sorted_feature_importance = sorted(feature_importance_dict.items(), key=lambda x: x[1], reverse=True)
+
+    # Convert the list of tuples to a dictionary and change np.float32 values to float
+    sorted_feature_importance = {k: float(v) if isinstance(v, np.float32) else v for k, v in sorted_feature_importance}
+
+    # Save to a JSON file
+    output_file_path = os.path.join(configs["outputDir"], args.e, f"D({args.d})_T({args.t})_A({args.a})_{name}_S({configs['seed']}).json")
+    with open(output_file_path, 'w') as file:
+        json.dump(sorted_feature_importance, file)
+
+    print(f"{name} Feature Importances: {sorted_feature_importance}")
+
+def set_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    random.seed(seed)

@@ -22,7 +22,7 @@ class Configs:
                     "duplicateCol": True,
                     "NaN": True,
                     "column_NaN": True,
-                    "maxNA": 0.30 #0.25 -> 0-1265, 1-588, features-27 | 0.30 -> 0-1241, 1-563, features-62
+                    "maxNA": 0.4 #0.25 -> 0-1265, 1-588, features-27 | 0.30 -> 0-1241, 1-563, features-62
                 },
 
                 "cleaning":
@@ -80,6 +80,13 @@ class Configs:
                     'max_features': ["sqrt", "log2"],
                     "min_samples_leaf": [5, 10, 20, 50, 100],
                     "random_state": [seed]
+                },
+
+                "xgb":
+                {
+                    # 'max_depth': [2, 3, 5, 10, 20],
+                    'learning_rate': [0.1, 0.01, 0.001],
+                    'subsample': [0.5, 0.7, 1]
                 },
 
                 "naive":

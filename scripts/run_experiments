@@ -1,0 +1,8 @@
+init:
+	mkdir ../output
+	mkdir ../output/hyperparameter_tuning
+
+baseline:
+
+	
+	

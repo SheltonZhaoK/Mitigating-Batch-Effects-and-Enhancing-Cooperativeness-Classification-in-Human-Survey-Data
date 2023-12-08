@@ -1,0 +1,15 @@
+Score: 0.611 +- 0.050, Fit Time: 0.002 +- 0.000, Parameters: {'criterion': 'entropy', 'min_samples_leaf': 5, 'random_state': 1}
+Score: 0.611 +- 0.050, Fit Time: 0.002 +- 0.000, Parameters: {'criterion': 'log_loss', 'min_samples_leaf': 5, 'random_state': 1}
+Score: 0.603 +- 0.063, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'gini', 'min_samples_leaf': 10, 'random_state': 1}
+Score: 0.603 +- 0.063, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'entropy', 'min_samples_leaf': 10, 'random_state': 1}
+Score: 0.603 +- 0.063, Fit Time: 0.002 +- 0.000, Parameters: {'criterion': 'log_loss', 'min_samples_leaf': 10, 'random_state': 1}
+Score: 0.594 +- 0.038, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'gini', 'min_samples_leaf': 5, 'random_state': 1}
+Score: 0.589 +- 0.053, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'gini', 'min_samples_leaf': 20, 'random_state': 1}
+Score: 0.589 +- 0.053, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'entropy', 'min_samples_leaf': 20, 'random_state': 1}
+Score: 0.589 +- 0.053, Fit Time: 0.002 +- 0.000, Parameters: {'criterion': 'log_loss', 'min_samples_leaf': 20, 'random_state': 1}
+Score: 0.575 +- 0.053, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'gini', 'min_samples_leaf': 100, 'random_state': 1}
+Score: 0.575 +- 0.053, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'entropy', 'min_samples_leaf': 100, 'random_state': 1}
+Score: 0.575 +- 0.053, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'log_loss', 'min_samples_leaf': 100, 'random_state': 1}
+Score: 0.572 +- 0.041, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'gini', 'min_samples_leaf': 50, 'random_state': 1}
+Score: 0.572 +- 0.041, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'entropy', 'min_samples_leaf': 50, 'random_state': 1}
+Score: 0.572 +- 0.041, Fit Time: 0.001 +- 0.000, Parameters: {'criterion': 'log_loss', 'min_samples_leaf': 50, 'random_state': 1}

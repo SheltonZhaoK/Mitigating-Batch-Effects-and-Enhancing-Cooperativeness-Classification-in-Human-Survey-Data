@@ -9,16 +9,17 @@
 
 import os, umap, json
 
+import pandas as pd
+import numpy as np
+
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from scipy.sparse import hstack
 from sklearn.pipeline import Pipeline
-from scipy import stats
-from sklearn.tree import DecisionTreeClassifier
 from sklearn.decomposition import PCA
 
-import pandas as pd
-import numpy as np
+from data_augmentor import augment_data
+
 
 class umapReducer(BaseEstimator, TransformerMixin):
     def __init__(self, seed):
@@ -41,7 +42,13 @@ class pcaReducer(BaseEstimator, TransformerMixin):
         self.criteria = criteria
     
     def fit(self, X, y=None):
-        self.pca = PCA(n_components=self.criteria)
+        if self.criteria > 0:
+            if len(X.columns) < self.criteria:
+                self.pca = PCA(n_components=len(X.columns))
+            else:
+                self.pca = PCA(n_components=self.criteria)
+        else: 
+            self.pca = PCA(n_components=self.criteria)
         return self
     
     def transform(self, X, y=None):
@@ -453,47 +460,6 @@ def impute_NaN(data, label):
     data = data.dropna(axis=1) # drop columns where no numeric values are present
     return data
 
-def select_features_ttest(data, label, alpha):
-    p_values = {}
-    selected_features = [label]
-
-    group_0 = data[data[label] == 0]
-    group_1 = data[data[label] == 1]
-
-    min_size = min(len(group_0), len(group_1))
-    group_0 = group_0.sample(min_size)
-    group_1 = group_1.sample(min_size)
-
-    for feature in data.columns:
-        if feature != label:
-            # Perform a paired t-test
-            t_stat, p_value = stats.ttest_ind(group_0[feature], group_1[feature])
-            p_values[feature] = p_value
-
-            if p_value < alpha:
-                selected_features.append(feature)
-
-    # Create a new DataFrame with only the selected features and the label
-    selected_data = data[selected_features]
-    print(f"Select {len(selected_features)-1} features with p_values smaller than {alpha}, original features: {len(data.columns)-1}")
-
-    return selected_data, p_values
-
-def select_features_importance(data, label, threshold=0.01):
-    X = data.drop(label, axis=1)
-    y = data[label]
-
-    model = xgb.XGBClassifier()
-    model.fit(X, y)
-    importances = model.feature_importances_
-    
-    feature_importances = dict(zip(X.columns, importances))
-    print(feature_importances)
-    selected_features = [feature for feature, importance in feature_importances.items() if importance > threshold]
-    selected_data = data[selected_features + [label]]
-    
-    return selected_data, feature_importances
-
 def select_features_manual(data, file):
     with open(file, 'r') as f:
         feature_names = [line.strip() for line in f]
@@ -517,104 +483,145 @@ def select_by_wave(data, sample, feature):
     return data
 
 def transform_2_oneWavePsample(data):
-    Wave1 = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "W1BABS", "W1COLGRD", "W1LTHS", "W1ADVDEG", "W1COMHS", "W1SOMCOL", "W1OTHLNG", "CD5A",   "W1EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "W1CL1R", "W1COUNTY", "W1BRNUSA", "W1MALE", "W1FEMALE", "CC3",   "CD15",   "CD1",   "W1STRATA", "CD6",   "CD8",   "CD2"]
-    Wave2 = ["W2INCA", "W2INCE", "W2INCF", "W2INCD", "W2INCB", "W2INCC", "W2INCG", "W2BABS", "W2COLGRD", "W2LTHS", "W2ADVDEG", "W2COMHS", "W2SOMCOL", "W2OTHLNG", "W2CD5A", "W2EDLEVL", "W2CD2A", "W2CD4A_A", "W2CD4A_B", "W2CD4A_C", "W2CD4A_D", "W2CD4A_E", "W2CD4A_F", "W2X1", "W2CD6A", "W2CL1R", "W2COUNTY", "W2BRNUSA", "W2MALE", "W2FEMALE", "W2CC3", "W2CD15", "W2CD1", "W2STRATA", "W2CD6", "W2CD8", "W2CD2"]
-    Wave3 = ["W3INCA", "W3INCE", "W3INCF", "W3INCD", "W3INCB", "W3INCC", "W3INCG", "W3BABS", "W3COLGRD", "W3LTHS", "W3ADVDEG", "W3COMHS", "W3SOMCOL", "W3OTHLNG", "W3CD5A", "W3EDLEVL", "W3CD2A", "W3CD4A_A", "W3CD4A_B", "W3CD4A_C", "W3CD4A_D", "W3CD4A_E", "W3CD4A_F", "W3X1", "W3CD6A", "W3CL1R", "W3COUNTY", "W3BRNUSA", "W3MALE", "W3FEMALE", "W3CC3", "W3CD15", "W3CD1", "W3STRATA", "W3CD6", "W3CD8", "W3CD2"]
-    Wave_Agnostic = ["AGE1829", "AGE3039", "AGE4049M", "AGE5059M", "AGE6064M", "AGE65PLM"]
+    print(f"{'*'*30} Transforming the Data {'*'*30}")
+    columns = data.columns
+    canidate_cols = []
+    cross_wave_variables = []
+    sample_wave = [0 for i in range(len(data))]
+    ind = [0 for i in range(len(data))]
 
-    Generic_Wave = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "BABS", "COLGRD", "LTHS", "ADVDEG", "COMHS", "SOMCOL", "OTHLNG", "CD5A",   "EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "CL1R", "COUNTY", "BRNUSA", "MALE", "FEMALE", "CC3",   "CD15",   "CD1",   "STRATA", "CD6",   "CD8",   "CD2"]
-    Generic_full_wave = Generic_Wave + Wave_Agnostic
-    # This Code block creates a new data frame where the frist wave seen is taken from each sample
-    # data = pd.read_csv("../data/ICPSR_36371/DS0001/36371-0001-Data.tsv", sep='\t')
-    # for col in data:
-    #     data[col] = pd.to_numeric(data[col], errors='coerce').fillna(-1).astype(int)
+    # Strip each varaible of W1, W2, or W3
+    for i, col in enumerate(columns):
+        if col[0:2] == "W1":
+            canidate_cols.append(col[2:])
+        elif col[0:2] == "W2":
+            canidate_cols.append(col[2:])
+        elif col[0:2] == "W3":
+            canidate_cols.append(col[2:])
+        else:
+            canidate_cols.append(col)
 
-    sample_wave = [0 for i in range(3661)]
-
+    # Create a set of variables that is wave independent 
+    for i, col in enumerate(canidate_cols):
+        # When there are three of the same varaible, the variable is wave dependent (only add one for cross wave set)
+        if canidate_cols.count(col) == 3:
+            # Mark the index as a wave dependent variable
+            ind[i] = 1 
+            if col not in cross_wave_variables:
+                cross_wave_variables.append(col)
+        # When there are more than three of the same variable, the varible is wave independent (add each instance)
+        else:
+            if data.columns[i] not in cross_wave_variables:
+                cross_wave_variables.append(data.columns[i])
+    # Find wave membership of each sample
     for i in range(3661):
-
         # 1, 2, 3
         if data["PANEL123"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
-            sample_wave[i] = 1
-
+            sample_wave[i] = 123
         # 1 and 3
         elif data["PANEL103"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV3"][i] == 1:
-            sample_wave[i] = 1
-
+            sample_wave[i] = 13
         # 1 and 2
         elif data["PANEL120"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1:
-            sample_wave[i] = 1
-
+            sample_wave[i] = 12
         # 2 and 3
         elif data["PANEL023"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
-            sample_wave[i] = 2
-        
+            sample_wave[i] = 23
         # 1
         elif data["ALLWAV1"][i] == 1:
             sample_wave[i] = 1
-
         # 2
         elif data["ALLWAV2"][i] == 1:
             sample_wave[i] = 2
-        
         # 3
         elif data["ALLWAV3"][i] == 1:
             sample_wave[i] = 3
 
-    # sample_wave: list of size 3661 which corrsponds to the first wave a sample has been seen
-    data_n = []
-
+    new_data = pd.DataFrame(columns=cross_wave_variables)
+    # Create the dataset
     for i, val in enumerate(sample_wave):
-        temp = []
-        if val == 1:
-
-            for j, var in enumerate(Wave1 + Wave_Agnostic):
-                temp.append(data[var][i])
-
-            data_n.append(temp)
-
-        elif val == 2:
-
-            for j, var in enumerate(Wave2 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-
-        elif val == 3:
-
-            for j, var in enumerate(Wave3 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-        
-    data_new = pd.DataFrame(data=data_n, columns=Generic_full_wave)
-    print(data_new.shape)
-    return data_new
-
+        temp = {column: [] for column in cross_wave_variables}
+        if str(val)[0] == '1':
+            for j, col in enumerate(columns):
+                # add a wave dependent variable
+                if ind[j] == 1:
+                    # Some W1 variables have a W1 prefix, others do not
+                    if col[0:2] == "W1":
+                        temp[col[2:]].append(data[col][i])
+                    elif col in cross_wave_variables:
+                        temp[col].append(data[col][i])
+                # add a wave independent variable
+                else:
+                    temp[col].append(data[col][i])
+            new_data = pd.concat([new_data, pd.DataFrame(temp)], ignore_index=False)
+        elif str(val)[0] == '2':
+            for j, col in enumerate(columns):
+                # add a wave dependent variable
+                if ind[j] == 1:
+                    if col[0:2] == "W2":
+                        temp[col[2:]].append(data[col][i])
+                # add a wave independent variable
+                else:
+                    temp[col].append(data[col][i])
+            new_data = pd.concat([new_data, pd.DataFrame(temp)], ignore_index=False)
+        elif str(val)[0] == '3':
+            for j, col in enumerate(columns):
+                # add a wave dependent variable
+                if ind[j] == 1:
+                    if col[0:2] == "W3":
+                        temp[col[2:]].append(data[col][i])
+                # add a wave independent variable
+                else:
+                    temp[col].append(data[col][i])
+            new_data = pd.concat([new_data, pd.DataFrame(temp)], ignore_index=True)
+    for column in new_data.columns:
+            new_data[column] = pd.to_numeric(new_data[column], errors='coerce')
+    return new_data
 
 def transform_2_allWavePsample(data):
-    # CL1R
-    Wave1 = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "W1BABS", "W1COLGRD", "W1LTHS", "W1ADVDEG", "W1COMHS", "W1SOMCOL", "W1OTHLNG", "CD5A",   "W1EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "W1CL1R", "W1COUNTY", "W1BRNUSA", "W1MALE", "W1FEMALE", "CC3",   "CD15",   "CD1",   "W1STRATA", "CD6",   "CD8",   "CD2"]
-    Wave2 = ["W2INCA", "W2INCE", "W2INCF", "W2INCD", "W2INCB", "W2INCC", "W2INCG", "W2BABS", "W2COLGRD", "W2LTHS", "W2ADVDEG", "W2COMHS", "W2SOMCOL", "W2OTHLNG", "W2CD5A", "W2EDLEVL", "W2CD2A", "W2CD4A_A", "W2CD4A_B", "W2CD4A_C", "W2CD4A_D", "W2CD4A_E", "W2CD4A_F", "W2X1", "W2CD6A", "W2CL1R", "W2COUNTY", "W2BRNUSA", "W2MALE", "W2FEMALE", "W2CC3", "W2CD15", "W2CD1", "W2STRATA", "W2CD6", "W2CD8", "W2CD2"]
-    Wave3 = ["W3INCA", "W3INCE", "W3INCF", "W3INCD", "W3INCB", "W3INCC", "W3INCG", "W3BABS", "W3COLGRD", "W3LTHS", "W3ADVDEG", "W3COMHS", "W3SOMCOL", "W3OTHLNG", "W3CD5A", "W3EDLEVL", "W3CD2A", "W3CD4A_A", "W3CD4A_B", "W3CD4A_C", "W3CD4A_D", "W3CD4A_E", "W3CD4A_F", "W3X1", "W3CD6A", "W3CL1R", "W3COUNTY", "W3BRNUSA", "W3MALE", "W3FEMALE", "W3CC3", "W3CD15", "W3CD1", "W3STRATA", "W3CD6", "W3CD8", "W3CD2"]
-    Wave_Agnostic = ["AGE1829", "AGE3039", "AGE4049M", "AGE5059M", "AGE6064M", "AGE65PLM"]
+    print(f"{'*'*30} Transforming the Data {'*'*30}")
+    columns = data.columns
+    canidate_cols = []
+    cross_wave_variables = []
+    sample_wave = [0 for i in range(3661)]
+    ind = [0 for i in range(3661)]
 
-    Generic_Wave = ["INCA",   "INCE",   "INCF",   "INCD",   "INCB",   "INCC",   "INCG",   "BABS", "COLGRD", "LTHS", "ADVDEG", "COMHS", "SOMCOL", "OTHLNG", "CD5A",   "EDLEVL", "CD2A",   "CD4A_A",   "CD4A_B",   "CD4A_C",   "CD4A_D",   "CD4A_E",   "CD4A_F",   "X1",   "CD6A",   "CL1R", "COUNTY", "BRNUSA", "MALE", "FEMALE", "CC3",   "CD15",   "CD1",   "STRATA", "CD6",   "CD8",   "CD2"]
-    Generic_full_wave = Generic_Wave + Wave_Agnostic
+    # Strip each varaible of W1, W2, or W3
+    for i, col in enumerate(columns):
+        if col[0:2] == "W1":
+            canidate_cols.append(col[2:])
+        elif col[0:2] == "W2":
+            canidate_cols.append(col[2:])
+        elif col[0:2] == "W3":
+            canidate_cols.append(col[2:])
+        else:
+            canidate_cols.append(col)
 
-    sample_wave = [0 for i in range(len(data))]
+    # Create a set of variables that is wave independent 
+    for i, col in enumerate(canidate_cols):
+        # When there are three of the same varaible, the variable is wave dependent (only add one for cross wave set)
+        if canidate_cols.count(col) == 3:
+            # Mark the index as a wave dependent variable
+            ind[i] = 1 
 
-    for i in range(len(data)):
+            if col not in cross_wave_variables:
+                cross_wave_variables.append(col)
+                
+
+        # When there are more than three of the same variable, the varible is wave independent (add each instance)
+        else:
+            if data.columns[i] not in cross_wave_variables:
+                cross_wave_variables.append(data.columns[i])
+
+    # Find wave membership of each sample
+    for i in range(3661):
 
         # 1, 2, 3
         if data["PANEL123"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1 and data["ALLWAV3"][i] == 1:
             sample_wave[i] = 123
-
-        # 1 and 3
         elif data["PANEL103"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV3"][i] == 1:
             sample_wave[i] = 13
 
-        # 1 and 2
         elif data["PANEL120"][i] == 1 and data["ALLWAV1"][i] == 1 and data["ALLWAV2"][i] == 1:
             sample_wave[i] = 12
 
@@ -633,90 +640,65 @@ def transform_2_allWavePsample(data):
         # 3
         elif data["ALLWAV3"][i] == 1:
             sample_wave[i] = 3
+            
+    new_data = pd.DataFrame(columns=cross_wave_variables)
 
-    # sample_wave: list of size 3661 which corrsponds to the first wave a sample has been seen
-    data_n = []
-
+    # Create the dataset
     for i, val in enumerate(sample_wave):
-        temp = []
-        if val == 123:
-            for j, var in enumerate(Wave1 + Wave_Agnostic):
-                temp.append(data[var][i])
+        for v in str(val):    
+            temp = {column: [] for column in cross_wave_variables}
+            if v == '1':
+                for j, col in enumerate(columns):
 
-            data_n.append(temp)
-            temp = []
+                    # add a wave dependent variable
+                    if ind[j] == 1:
+                        
+                        # Some W1 variables have a W1 prefix, others do not
+                        if col[0:2] == "W1":
+                            temp[col[2:]].append(data[col][i])
 
-            for j, var in enumerate(Wave2 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-            temp = []
+                        elif col in cross_wave_variables:
+                            temp[col].append(data[col][i])
 
-            for j, var in enumerate(Wave3 + Wave_Agnostic):
-                temp.append(data[var][i])
+                    # add a wave independent variable
+                    else:
+                        temp[col].append(data[col][i])
 
-            data_n.append(temp)
+                new_data = pd.concat([new_data, pd.DataFrame(temp)], ignore_index=False)
 
-        elif val == 12:
-            for j, var in enumerate(Wave1 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-            temp = []
+            elif v == '2':
+                for j, col in enumerate(columns):
 
-            for j, var in enumerate(Wave2 + Wave_Agnostic):
-                temp.append(data[var][i])
+                    # add a wave dependent variable
+                    if ind[j] == 1:
+                        
+                        if col[0:2] == "W2":
+                            temp[col[2:]].append(data[col][i])
 
-            data_n.append(temp)
+                    # add a wave independent variable
+                    else:
+                        temp[col].append(data[col][i])
 
-        elif val == 13:
-            for j, var in enumerate(Wave1 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-            temp = []
+                new_data = pd.concat([new_data, pd.DataFrame(temp)], ignore_index=False)
 
-            for j, var in enumerate(Wave3 + Wave_Agnostic):
-                temp.append(data[var][i])
 
-            data_n.append(temp)
+            elif v == '3':
+                for j, col in enumerate(columns):
 
-        elif val == 23:
-            for j, var in enumerate(Wave2 + Wave_Agnostic):
-                temp.append(data[var][i])
+                    # add a wave dependent variable
+                    if ind[j] == 1:
+                        
+                        if col[0:2] == "W3":
+                            temp[col[2:]].append(data[col][i])
 
-            data_n.append(temp)
-            temp = []
+                    # add a wave independent variable
+                    else:
+                        temp[col].append(data[col][i])
 
-            for j, var in enumerate(Wave3 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-
-        elif val == 1:
-
-            for j, var in enumerate(Wave1 + Wave_Agnostic):
-                temp.append(data[var][i])
-
-            data_n.append(temp)
-
-        elif val == 2:
-
-            for j, var in enumerate(Wave2 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-
-        elif val == 3:
-
-            for j, var in enumerate(Wave3 + Wave_Agnostic):
-                temp.append(data[var][i])
-            
-            data_n.append(temp)
-        
-    data_new = pd.DataFrame(data=data_n, columns=Generic_full_wave)
-    print(data_new.shape)
-    return data_new
+                new_data = pd.concat([new_data, pd.DataFrame(temp)], ignore_index=True)
+    for column in new_data.columns:
+        new_data[column] = pd.to_numeric(new_data[column], errors='coerce')
+    return new_data
 
 def reduce_data(data, pc_reducer, umap_reducer, args):
     if args.d == "pca":
@@ -731,11 +713,6 @@ def reduce_data(data, pc_reducer, umap_reducer, args):
 def encode_label(data, label):
     data[label].fillna(0, inplace=True)
     data[label] = data[label].apply(lambda x: 1 if x in [1.0, 2.0] else 0)
-
-    # data = data.dropna(subset=[label])
-    # data = data[data[label] != 9]
-    # data[label] = data[label].apply(lambda x: 1 if x in [1.0, 2.0] else 0)
-
     return data
 
 def make_data(data, label, configs, args, type, dataCleaner = None, feature_selector = None, pc_reducer = None, umap_reducer = None):
@@ -755,6 +732,11 @@ def make_data(data, label, configs, args, type, dataCleaner = None, feature_sele
         data = dataCleaner.fit_transform(data)
         target = data[[label]]
         data = data.drop(columns=[label])
+
+        #data augmentation
+        if args.a is not None:
+            data, target = augment_data(data, label, target, args, configs)
+
         # features processing
         print(f"{'*'*30} Select Features {'*'*30}")
         feature_selector = Pipeline([
@@ -775,6 +757,12 @@ def make_data(data, label, configs, args, type, dataCleaner = None, feature_sele
             data = reduce_data(data, pc_reducer, umap_reducer, args)
         return data, target, dataCleaner, feature_selector, pc_reducer, umap_reducer
     else:
+        # if args.a is not None:
+        #     print(f"{'*'*30} Extract saved test data {'*'*30}")
+        #     data = pd.read_csv(os.path.join("../data", f"{args.d}_{args.t}_{configs['seed']}_testX.csv"))
+        #     target = pd.read_csv(os.path.join("../data", f"{args.d}_{args.t}_{configs['seed']}_testY.csv"))
+        #     target = target.drop(columns=["Unnamed: 0"])
+        # else:
         report = audit_data(data, duplicateRow = configs["DataProcessing"]["audit"]["duplicateRow"], duplicateCol = configs["DataProcessing"]["audit"]["duplicateCol"], 
                         NaN = configs["DataProcessing"]["audit"]["NaN"], column_NaN = configs["DataProcessing"]["audit"]["column_NaN"],  
                         maxNA = configs["DataProcessing"]["audit"]["maxNA"])
@@ -797,4 +785,6 @@ def make_data(data, label, configs, args, type, dataCleaner = None, feature_sele
         data = feature_selector.transform(data)
         if not args.d == "raw":
             data = reduce_data(data, pc_reducer, umap_reducer, args)
+        data.to_csv(os.path.join("../data", f"{args.d}_{args.t}_{configs['seed']}_testX.csv"))
+        target.to_csv(os.path.join("../data", f"{args.d}_{args.t}_{configs['seed']}_testY.csv"))
         return data, target
