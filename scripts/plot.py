@@ -206,7 +206,7 @@ def result3():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='dataMining assignment5')
-    parser.add_argument('-e', type=str, default=None, help='specify which result to generate')
+    parser.add_argument('-e', required = True, type=str, default=None, help='specify which result to generate')
     args = parser.parse_args()
 
     if args.e == "result1":
