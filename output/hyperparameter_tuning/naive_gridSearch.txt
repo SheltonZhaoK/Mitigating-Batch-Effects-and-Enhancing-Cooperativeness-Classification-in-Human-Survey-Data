@@ -1,1 +1,0 @@
-Score: 0.499 +- 0.000, Fit Time: 0.001 +- 0.000, Parameters: {'random_state': 1}

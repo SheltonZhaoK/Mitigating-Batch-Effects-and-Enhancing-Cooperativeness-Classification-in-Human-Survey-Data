@@ -1,7 +1,0 @@
-,Unnamed: 0,Data Type,Data Transformation,X_train Size,X_test Size,Classifiers,Training Accuracy,Accuracy,Weighted F1,Cohen Kappa,Data Augmentation Methods,GAN,seed
-6,6,raw,normal,"(6552, 59)","(684, 59)",naive,0.5,0.6915,0.8176,0.0,smote,True,1
-7,7,raw,normal,"(6552, 59)","(684, 59)",MLP,0.9957,0.5673,0.5508,0.1393,smote,True,1
-8,8,raw,normal,"(6552, 59)","(684, 59)",logisticRegression,0.8498,0.3918,0.4591,0.0571,smote,True,1
-9,9,raw,normal,"(6552, 59)","(684, 59)",decisionTree,0.9603,0.6842,0.7744,0.0342,smote,True,1
-10,10,raw,normal,"(6552, 59)","(684, 59)",randomForest,0.9832,0.6681,0.6627,0.2507,smote,True,1
-11,11,raw,normal,"(6552, 59)","(684, 59)",xgb,0.9805,0.6886,0.7587,0.0806,smote,True,1
