@@ -37,10 +37,10 @@ def augment_data(data, label, target, args, configs):
         combined_synthesized_data = pd.concat([augmented_data_0, augmented_data_1])
         combined_label = pd.concat([augmented_label_0, augmented_label_1])
 
-        data = pd.concat([data, combined_synthesized_data])
-        target = pd.concat([target, combined_label])  
-        # data = combined_synthesized_data
-        # target = combined_label
+        # data = pd.concat([data, combined_synthesized_data])
+        # target = pd.concat([target, combined_label])  
+        data = combined_synthesized_data
+        target = combined_label
 
         data = data.reset_index(drop=True)
         target = target.reset_index(drop=True)

@@ -1,9 +1,0 @@
-Score: 0.614 +- 0.036, Fit Time: 0.054 +- 0.005, Parameters: {'learning_rate': 0.01, 'subsample': 1}
-Score: 0.614 +- 0.031, Fit Time: 0.050 +- 0.004, Parameters: {'learning_rate': 0.001, 'subsample': 0.5}
-Score: 0.611 +- 0.042, Fit Time: 0.058 +- 0.002, Parameters: {'learning_rate': 0.001, 'subsample': 0.7}
-Score: 0.608 +- 0.036, Fit Time: 0.054 +- 0.003, Parameters: {'learning_rate': 0.01, 'subsample': 0.7}
-Score: 0.608 +- 0.058, Fit Time: 0.056 +- 0.012, Parameters: {'learning_rate': 0.001, 'subsample': 1}
-Score: 0.603 +- 0.036, Fit Time: 0.050 +- 0.006, Parameters: {'learning_rate': 0.01, 'subsample': 0.5}
-Score: 0.603 +- 0.041, Fit Time: 0.041 +- 0.006, Parameters: {'learning_rate': 0.1, 'subsample': 0.5}
-Score: 0.600 +- 0.010, Fit Time: 0.051 +- 0.006, Parameters: {'learning_rate': 0.1, 'subsample': 1}
-Score: 0.594 +- 0.020, Fit Time: 0.057 +- 0.008, Parameters: {'learning_rate': 0.1, 'subsample': 0.7}

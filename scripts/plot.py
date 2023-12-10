@@ -62,67 +62,67 @@ def result1():
 
 
 def result2():
-    # data = pd.read_csv("../output/baseline/baseline_results.csv")
-    # data.fillna('normal', inplace=True)
-    # plt.figure(figsize=(6.4, 4.8*2))
-    # i = 1
+    data = pd.read_csv("../output/baseline/baseline_results.csv")
+    data.fillna('normal', inplace=True)
+    plt.figure(figsize=(6.4, 4.8*2))
+    i = 1
 
-    # for tempt in [data[data["Data Transformation"] == "normal"], data[data["Data Transformation"] == "oneW"]]:
-    #     for metric in ["Accuracy"]:
-    #         plt.subplot(2,1,i)
-    #         sns.barplot(data=tempt, x="Data Type", y=metric, hue="Classifiers", palette = customPalette)
-    #         i += 1
-    # plt.savefig("../output/result2A.svg")
+    for tempt in [data[data["Data Transformation"] == "normal"], data[data["Data Transformation"] == "oneW"]]:
+        for metric in ["Accuracy"]:
+            plt.subplot(2,1,i)
+            sns.barplot(data=tempt, x="Data Type", y=metric, hue="Classifiers", palette = customPalette)
+            i += 1
+    plt.savefig("../output/result2A.svg")
 
-    # report = pd.DataFrame(columns = ["Data Type", "transformation", "Classifiers", "Class 0 Accuracy", "Class 1 Accuracy"])
-    # for transformation in [None, "oneW"]:
-    #     for dataType in ["raw", "pca", "umap", "pca_umap"]:
-    #         dataPath = f"../output/baseline/ANone_D{dataType}_T{transformation}_GFalse_testingData_predications.csv"
-    #         data = pd.read_csv(dataPath)
-    #         labels0 = data[data["label"] == 0] #fake response
-    #         labels1 = data[data["label"] == 1] #real response
-    #         for classifier in ["naive","MLP","logisticRegression","decisionTree","randomForest","xgb"]:
-    #             class0_accuracy = (labels0[classifier] == 0).mean()
-    #             class1_accuracy = (labels1[classifier] == 1).mean()
-    #             report.loc[len(report)] = [dataType, transformation, classifier, class0_accuracy, class1_accuracy]
+    report = pd.DataFrame(columns = ["Data Type", "transformation", "Classifiers", "Class 0 Accuracy", "Class 1 Accuracy"])
+    for transformation in [None, "oneW"]:
+        for dataType in ["raw", "pca", "umap", "pca_umap"]:
+            dataPath = f"../output/baseline/ANone_D{dataType}_T{transformation}_GFalse_testingData_predications.csv"
+            data = pd.read_csv(dataPath)
+            labels0 = data[data["label"] == 0] #fake response
+            labels1 = data[data["label"] == 1] #real response
+            for classifier in ["naive","MLP","logisticRegression","decisionTree","randomForest","xgb"]:
+                class0_accuracy = (labels0[classifier] == 0).mean()
+                class1_accuracy = (labels1[classifier] == 1).mean()
+                report.loc[len(report)] = [dataType, transformation, classifier, class0_accuracy, class1_accuracy]
 
-    # report.fillna('normal', inplace=True)
-    # report.to_csv("../output/baseline_classAccuracy_report.csv")
-    # plt.figure(figsize=(6.4*2, 4.8*2))
-    # i = 1
-    # for tempt in [report[report["transformation"] == "normal"], report[report["transformation"] == "oneW"]]:
-    #     for metric in ["Class 0 Accuracy", "Class 1 Accuracy"]:
-    #         plt.subplot(2, 2, i)
-    #         sns.barplot(data=tempt, x="Data Type", y=metric, hue="Classifiers", palette = customPalette)
-    #         plt.ylim(0, 1.0)
-    #         i += 1
-    # plt.savefig("../output/result2B.svg")
+    report.fillna('normal', inplace=True)
+    report.to_csv("../output/baseline_classAccuracy_report.csv")
+    plt.figure(figsize=(6.4*2, 4.8*2))
+    i = 1
+    for tempt in [report[report["transformation"] == "normal"], report[report["transformation"] == "oneW"]]:
+        for metric in ["Class 0 Accuracy", "Class 1 Accuracy"]:
+            plt.subplot(2, 2, i)
+            sns.barplot(data=tempt, x="Data Type", y=metric, hue="Classifiers", palette = customPalette)
+            plt.ylim(0, 1.0)
+            i += 1
+    plt.savefig("../output/result2B.svg")
 
-    # plt.figure(figsize=(6.4*3, 4.8*2))
-    # for i, tree in enumerate(["decisionTree", "xgb", "randomForest"]):
-    #     with open(f"../output/baseline/D(raw)_T(None)_A(None)_{tree}_S(1).json", 'r') as file:
-    #         data = json.load(file)
-    #         df = pd.DataFrame(data.items(), columns=['Feature', 'Feature Importance']).sort_values(by='Feature Importance', ascending=False)
-    #         df = df.head(10)
-    #         plt.subplot(2, 3, i+1)
-    #         sns.barplot(x='Feature Importance', y='Feature', data=df)
-    #         plt.title(f'{tree}_Feature Importance Plot')
-    #         plt.xlabel('Feature Importance')
-    #         plt.ylabel('Features')
-    #         plt.tight_layout()
+    plt.figure(figsize=(6.4*3, 4.8*2))
+    for i, tree in enumerate(["decisionTree", "xgb", "randomForest"]):
+        with open(f"../output/baseline/D(raw)_T(None)_A(None)_{tree}_S(1).json", 'r') as file:
+            data = json.load(file)
+            df = pd.DataFrame(data.items(), columns=['Feature', 'Feature Importance']).sort_values(by='Feature Importance', ascending=False)
+            df = df.head(10)
+            plt.subplot(2, 3, i+1)
+            sns.barplot(x='Feature Importance', y='Feature', data=df)
+            plt.title(f'{tree}_Feature Importance Plot')
+            plt.xlabel('Feature Importance')
+            plt.ylabel('Features')
+            plt.tight_layout()
 
-    # for i, tree in enumerate(["decisionTree", "xgb", "randomForest"]):
-    #     with open(f"../output/baseline/D(raw)_T(oneW)_A(None)_{tree}_S(1).json", 'r') as file:
-    #         data = json.load(file)
-    #         df = pd.DataFrame(data.items(), columns=['Feature', 'Feature Importance']).sort_values(by='Feature Importance', ascending=False)
-    #         df = df.head(10)
-    #         plt.subplot(2, 3, i+4)
-    #         sns.barplot(x='Feature Importance', y='Feature', data=df)
-    #         plt.title(f'{tree}_Feature Importance Plot')
-    #         plt.xlabel('Feature Importance')
-    #         plt.ylabel('Features')
-    #         plt.tight_layout()
-    # plt.savefig("../output/result2C.svg")
+    for i, tree in enumerate(["decisionTree", "xgb", "randomForest"]):
+        with open(f"../output/baseline/D(raw)_T(oneW)_A(None)_{tree}_S(1).json", 'r') as file:
+            data = json.load(file)
+            df = pd.DataFrame(data.items(), columns=['Feature', 'Feature Importance']).sort_values(by='Feature Importance', ascending=False)
+            df = df.head(10)
+            plt.subplot(2, 3, i+4)
+            sns.barplot(x='Feature Importance', y='Feature', data=df)
+            plt.title(f'{tree}_Feature Importance Plot')
+            plt.xlabel('Feature Importance')
+            plt.ylabel('Features')
+            plt.tight_layout()
+    plt.savefig("../output/result2C.svg")
 
     training_data = "../output/baseline/ANone_Dpca_TNone_GFalse_trainingData.csv"
     testing_data = "../output/baseline/ANone_Dpca_TNone_GFalse_testingData_predications.csv"
@@ -187,22 +187,22 @@ def result3():
                 i += 1
     plt.savefig("../output/result3.svg")
 
-    # augmentation_df = augmentation_df[augmentation_df["Classifiers"] != "naive"]
-    # plt.figure(figsize=(6.4*5, 4.8*4))
-    # i = 1
-    # for gan in [False, True]:
-    #     for transformation in ["normal", "oneW"]:
-    #         for augmentation in ["smote", "editNN", "tomkLink", "smoteNN", "smoteTomek"]:
-    #             tempt_data = augmentation_df[
-    #                 (augmentation_df["GAN"] == True) & 
-    #                 (augmentation_df["Data Transformation"] == transformation) & 
-    #                 (augmentation_df["Data Augmentation Methods"] == augmentation)]
-    #             plt.subplot(4, 5, i)
-    #             sns.barplot(data=tempt_data, x="Data Type", y="Accuracy", hue="Classifiers", palette = customPalette)
-    #             plt.title(f'{augmentation}_{gan}')
-    #             plt.ylim(0, 0.8)
-    #             i += 1
-    # plt.savefig("../output/result3B.svg")
+    augmentation_df = augmentation_df[augmentation_df["Classifiers"] != "naive"]
+    plt.figure(figsize=(6.4*5, 4.8*4))
+    i = 1
+    for gan in [False, True]:
+        for transformation in ["normal", "oneW"]:
+            for augmentation in ["smote", "editNN", "tomkLink", "smoteNN", "smoteTomek"]:
+                tempt_data = augmentation_df[
+                    (augmentation_df["GAN"] == True) & 
+                    (augmentation_df["Data Transformation"] == transformation) & 
+                    (augmentation_df["Data Augmentation Methods"] == augmentation)]
+                plt.subplot(4, 5, i)
+                sns.barplot(data=tempt_data, x="Data Type", y="Accuracy", hue="Classifiers", palette = customPalette)
+                plt.title(f'{augmentation}_{gan}')
+                plt.ylim(0, 0.8)
+                i += 1
+    plt.savefig("../output/result3B.svg")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='dataMining assignment5')

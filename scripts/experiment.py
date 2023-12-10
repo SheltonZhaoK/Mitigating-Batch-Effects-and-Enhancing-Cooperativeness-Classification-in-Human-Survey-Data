@@ -29,9 +29,6 @@ def main(configs, args, report):
     else:
         data = data.drop(columns = ["IWER4_A", "W3IWER4_B", "IWER4_B","RWAVENEW", "RWAVEOLD"])
     
-    # label = "W3IWER4_B" # How Interested Was Respondent? (Iwer's assessment)
-    # data = data.drop(columns = ["IWER4_A", "W3IWER4_A", "IWER4_B"])
-    
     if args.t is not None:
         if args.t == "oneW":
             data = transform_2_oneWavePsample(data)
@@ -95,9 +92,9 @@ def main(configs, args, report):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='dataMining assignment5')
-    parser.add_argument('-t', choices = ["oneW", "allW"], type=str, default=None, help='specify two type of transformations to handle the original data')
+    parser.add_argument('-t', choices = ["oneW"], type=str, default=None, help='specify two type of transformations to handle the original data')
     parser.add_argument('-d', choices = ["raw", "pca", "umap", "pca_umap"], type=str, default=None, help='specify three type of data to use')
-    parser.add_argument('-a', type=str, default=None, help='choose which data augmentation method to use')
+    parser.add_argument('-a', choices = ["smote", "editNN", "tomkLink", "smoteNN", "smoteTomek"], type=str, default=None, help='choose which data augmentation method to use')
     parser.add_argument('-e', required = True, choices = ["explore", "preliminary", "baseline", "augmentation"], type=str, default=None, help='experiments name')
     parser.add_argument('-gan', action="store_true", help='whether to use GAN to increase the size of training data')
     args = parser.parse_args()
